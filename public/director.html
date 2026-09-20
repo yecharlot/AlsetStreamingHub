@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Director · Alset Streaming</title>
+<link rel="stylesheet" href="/styles.css"/>
+</head>
+<body>
+<div class="shell">
+  <header class="top">
+    <div>
+      <h1>Director</h1>
+      <p class="tag">Elige la cámara programa · se empuja a los espectadores</p>
+    </div>
+    <a class="btn" href="/">Inicio</a>
+  </header>
+  <div class="stage"><video id="remote" playsinline autoplay controls></video></div>
+  <div class="bar">
+    <span class="status" id="st">Conectando…</span>
+    <button class="btn primary" id="btnProg" disabled>Marcar como programa</button>
+  </div>
+  <div class="cams" id="cams"></div>
+</div>
+<script type="module">
+import { wsUrl, createPeerConnection } from "./rtc.js";
+const params = new URLSearchParams(location.search);
+const matchId = params.get("match") || "partido-demo";
+const ticket = params.get("ticket") || "";
+const myId = "dir-" + Math.random().toString(36).slice(2, 8);
+let ws, producers = [], activeId = null, pc = null;
+const st = document.getElementById("st");
+const video = document.getElementById("remote");
+const camsEl = document.getElementById("cams");
+const btnProg = document.getElementById("btnProg");
+
+function renderCams() {
+  camsEl.innerHTML = producers.filter(p=>p.online).map(p=>{
+    const q = p.quality>=0.7?"q":p.quality>=0.4?"q mid":"q low";
+    return `<div class="cam ${p.id===activeId?"active":""}" data-id="${p.id}">
+      <strong>${p.label||p.id}</strong>
+      <div class="${q}">${(p.quality*100|0)}%</div></div>`;
+  }).join("") || `<p class="muted">Sin cámaras</p>`;
+  camsEl.querySelectorAll(".cam").forEach(el=>el.onclick=()=>preview(el.dataset.id));
+}
+
+async function preview(id) {
+  activeId = id;
+  btnProg.disabled = false;
+  renderCams();
+  if (pc) { pc.close(); pc = null; }
+  pc = createPeerConnection();
+  pc.ontrack = (e) => { video.srcObject = e.streams[0]; st.textContent = "Preview " + id; st.classList.add("on"); };
+  pc.onicecandidate = (e) => {
+    if (e.candidate && ws?.readyState===1)
+      ws.send(JSON.stringify({ type:"signal", to:id, data:{ candidate:e.candidate }}));
+  };
+  pc.addTransceiver("video", { direction:"recvonly" });
+  pc.addTransceiver("audio", { direction:"recvonly" });
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  ws.send(JSON.stringify({ type:"signal", to:id, data:{ offer }}));
+}
+
+btnProg.onclick = () => {
+  if (!activeId || !ws) return;
+  ws.send(JSON.stringify({ type:"program", producerId: activeId }));
+  st.textContent = "Programa → " + activeId;
+};
+
+ws = new WebSocket(wsUrl(matchId, { role:"director", id:myId, ticket }));
+ws.onopen = () => st.textContent = "Director listo";
+ws.onmessage = async (ev) => {
+  const msg = JSON.parse(ev.data);
+  if (msg.type==="room_state" || msg.type==="presence") {
+    producers = msg.producers||[];
+    renderCams();
+  }
+  if (msg.type==="producer_join") {
+    producers = producers.filter(p=>p.id!==msg.producer.id).concat([msg.producer]);
+    renderCams();
+  }
+  if (msg.type==="quality") {
+    producers = producers.map(p=>p.id===msg.id?{...p,...msg.producer}:p);
+    renderCams();
+  }
+  if (msg.type==="signal" && msg.from===activeId && msg.data) {
+    if (msg.data.answer) await pc.setRemoteDescription(msg.data.answer);
+    else if (msg.data.candidate) try { await pc.addIceCandidate(msg.data.candidate); } catch(_){}
+  }
+};
+</script>
+</body>
+</html>

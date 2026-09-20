@@ -1,0 +1,14 @@
+{
+  "name": "alset-streaming-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Alset Streaming Hub — multi-cam live sports via WebRTC, Cloudflare Workers + Durable Objects",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.47.0"
+  }
+}
