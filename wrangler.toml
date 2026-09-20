@@ -13,7 +13,7 @@ class_name = "MatchRoom"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["MatchRoom"]
+new_sqlite_classes = ["MatchRoom"]
 
 # Optional: set STREAM_ADMIN_KEY in dashboard for creating matches / tickets
 # [vars]
