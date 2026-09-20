@@ -2,13 +2,22 @@
   "name": "alset-streaming-hub",
   "version": "0.1.0",
   "private": true,
-  "description": "Alset Streaming Hub — multi-cam live sports via WebRTC, Cloudflare Workers + Durable Objects",
+  "description": "Alset Streaming Hub \u2014 multi-cam live sports via WebRTC, Cloudflare Workers + Durable Objects",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "tail": "wrangler tail"
+    "tail": "wrangler tail",
+    "start": "node server.mjs",
+    "deploy:cf": "wrangler deploy"
   },
   "devDependencies": {
     "wrangler": "^4.135.0"
+  },
+  "type": "module",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
