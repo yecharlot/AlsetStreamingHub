@@ -17,6 +17,11 @@
     <span class="badge">WebRTC + DO</span>
   </header>
 
+  <section class="card">
+    <h2>Desde el móvil</h2>
+    <p class="muted">Abre la URL con <strong>https://</strong> en Chrome o Safari (no app in-app browser si bloquea cámara). Permite cámara y micrófono. Mismo <code>match</code> en todos los dispositivos.</p>
+    <pre class="out" id="baseUrl">—</pre>
+  </section>
   <section class="hero card">
     <h2>Ver un partido</h2>
     <p class="muted">Entra con el código de partido y tu ticket (si el organizador lo requiere).</p>
@@ -87,6 +92,11 @@ document.getElementById('btnTicket').onclick = async () => {
     out.textContent = String(err);
   }
 };
+document.getElementById('baseUrl').textContent = location.origin + '\n' + location.origin + '/publish.html?match=partido-demo';
+fetch('/api/health').then(r=>r.json()).then(j=>{
+  document.getElementById('baseUrl').textContent += '\nSFU: ' + (j.sfu ? 'activo' : 'inactivo');
+}).catch(e=>{});
 </script>
 </body>
 </html>
+<!-- v021 -->

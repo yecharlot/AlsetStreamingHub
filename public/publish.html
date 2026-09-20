@@ -2,7 +2,8 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
 <title>Transmitir · Alset Streaming</title>
 <link rel="stylesheet" href="/styles.css"/>
 </head>
@@ -11,98 +12,80 @@
   <header class="top">
     <div>
       <h1>Transmitir</h1>
-      <p class="tag">Cámara del partido · encode en este dispositivo</p>
+      <p class="tag">Cámara → SFU Cloudflare · este dispositivo hace el encode</p>
     </div>
     <a class="btn" href="/">Inicio</a>
   </header>
   <div class="stage"><video id="local" muted playsinline autoplay></video></div>
   <div class="bar">
-    <button class="btn primary" id="btnStart">Iniciar cámara</button>
-    <button class="btn" id="btnStop" disabled>Detener</button>
+    <button class="btn primary" id="btnStart" type="button">Iniciar cámara</button>
+    <button class="btn" id="btnStop" type="button" disabled>Detener</button>
     <span class="status" id="st">Listo</span>
   </div>
-  <pre class="out" id="log">—</pre>
+  <pre class="out" id="log">Abre esta página por HTTPS en Chrome o Safari del teléfono.</pre>
 </div>
-<script type="module">
-import { wsUrl, createPeerConnection, getCameraStream, estimateQuality } from "./rtc.js";
+<script src="/hub.js"></script>
+<script>
+(function(){
+  const H = window.AlsetHub;
+  const matchId = H.qs("match","partido-demo");
+  const label = H.qs("label","Camara");
+  const myId = "pub-" + Math.random().toString(36).slice(2,8);
+  const logEl = document.getElementById("log");
+  const st = document.getElementById("st");
+  const video = document.getElementById("local");
+  let stream, ws, pub;
 
-const params = new URLSearchParams(location.search);
-const matchId = params.get("match") || "partido-demo";
-const label = params.get("label") || "Camara";
-const myId = "pub-" + Math.random().toString(36).slice(2, 8);
+  function log(m){ logEl.textContent = typeof m === "string" ? m : JSON.stringify(m,null,2); }
 
-const logEl = document.getElementById("log");
-const st = document.getElementById("st");
-const video = document.getElementById("local");
-let stream, ws, pcs = new Map();
+  log(H.diag());
 
-function log(m) { logEl.textContent = m; }
-
-document.getElementById("btnStart").onclick = async () => {
-  try {
-    stream = await getCameraStream();
-    video.srcObject = stream;
-    st.textContent = "En vivo";
-    st.classList.add("on");
-    document.getElementById("btnStop").disabled = false;
-    connect();
-  } catch (e) {
-    log("Cámara: " + e.message);
-  }
-};
-
-document.getElementById("btnStop").onclick = () => {
-  stream?.getTracks().forEach((t) => t.stop());
-  ws?.close();
-  pcs.forEach((pc) => pc.close());
-  pcs.clear();
-  st.textContent = "Detenido";
-  st.classList.remove("on");
-};
-
-function connect() {
-  ws = new WebSocket(wsUrl(matchId, { role: "publisher", id: myId, label }));
-  ws.onopen = () => log("Conectado al hub · " + matchId + " · " + myId);
-  ws.onclose = () => { st.textContent = "Desconectado"; st.classList.remove("on"); };
-  ws.onmessage = async (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.type === "signal" && msg.data) {
-      await handleSignal(msg.from, msg.data);
+  document.getElementById("btnStart").onclick = async function(){
+    try {
+      st.textContent = "Pidiendo cámara…";
+      stream = await H.getCam();
+      video.srcObject = stream;
+      await video.play().catch(function(){});
+      st.textContent = "Publicando a SFU…";
+      pub = await H.sfuPublish(stream, myId);
+      st.textContent = "En vivo (SFU)";
+      st.classList.add("on");
+      document.getElementById("btnStop").disabled = false;
+      connectWs(pub);
+      log({ ok:true, sessionId: pub.sessionId, tracks: pub.tracks, matchId: matchId });
+    } catch (e) {
+      st.textContent = "Error";
+      log(String(e.message || e) + "\n\n" + JSON.stringify(H.diag(),null,2));
     }
   };
-  setInterval(async () => {
-    if (!ws || ws.readyState !== 1) return;
-    // report quality from first pc or baseline
-    let q = { quality: 0.75, fps: 24, bitrate: 1 };
-    for (const pc of pcs.values()) {
-      q = await estimateQuality(pc);
-      break;
-    }
-    ws.send(JSON.stringify({ type: "quality", ...q }));
-  }, 4000);
-}
 
-async function handleSignal(from, data) {
-  let pc = pcs.get(from);
-  if (!pc) {
-    pc = createPeerConnection();
-    pcs.set(from, pc);
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
-    pc.onicecandidate = (e) => {
-      if (e.candidate && ws?.readyState === 1) {
-        ws.send(JSON.stringify({ type: "signal", to: from, data: { candidate: e.candidate } }));
-      }
+  document.getElementById("btnStop").onclick = function(){
+    try { stream && stream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){}
+    try { pub && pub.pc && pub.pc.close(); } catch(_){}
+    try { ws && ws.close(); } catch(_){}
+    st.textContent = "Detenido";
+    st.classList.remove("on");
+  };
+
+  function connectWs(pub){
+    ws = new WebSocket(H.wsUrl(matchId, { role:"publisher", id: myId, label: label }));
+    ws.onopen = function(){
+      ws.send(JSON.stringify({
+        type: "sfu_publish",
+        sessionId: pub.sessionId,
+        tracks: pub.tracks
+      }));
     };
+    ws.onerror = function(){ log("WebSocket error — revisa red / URL wss"); };
+    ws.onclose = function(ev){ st.textContent = "WS cerrado " + (ev.code||""); };
+    setInterval(function(){
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type:"quality", quality: 0.85, fps: 24, bitrate: 1 }));
+      }
+    }, 5000);
   }
-  if (data.offer) {
-    await pc.setRemoteDescription(data.offer);
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    ws.send(JSON.stringify({ type: "signal", to: from, data: { answer } }));
-  } else if (data.candidate) {
-    try { await pc.addIceCandidate(data.candidate); } catch (_) {}
-  }
-}
+})();
 </script>
 </body>
 </html>
+<!-- v021 -->

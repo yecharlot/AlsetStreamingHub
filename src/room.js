@@ -174,6 +174,21 @@ export class MatchRoom {
       const info = this.sessions.get(server);
       if (!info) return;
 
+      // SFU publish announcement (session + track names)
+      if (msg.type === "sfu_publish" && info.role === "publisher") {
+        const producers = await this.getProducers();
+        if (!producers[info.id]) {
+          producers[info.id] = { id: info.id, label: info.label, online: true, quality: 0.7 };
+        }
+        producers[info.id].sfuSessionId = msg.sessionId || null;
+        producers[info.id].tracks = msg.tracks || [];
+        producers[info.id].online = true;
+        producers[info.id].updatedAt = Date.now();
+        await this.putProducers(producers);
+        this.broadcast({ type: "producer_join", producer: producers[info.id] });
+        return;
+      }
+
       // Quality telemetry from publisher
       if (msg.type === "quality" && info.role === "publisher") {
         const producers = await this.getProducers();

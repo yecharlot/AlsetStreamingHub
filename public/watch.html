@@ -2,8 +2,8 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Ver partido · Alset Streaming</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"/>
+<title>Ver · Alset Streaming</title>
 <link rel="stylesheet" href="/styles.css"/>
 </head>
 <body>
@@ -11,112 +11,95 @@
   <header class="top">
     <div>
       <h1 id="title">Partido en vivo</h1>
-      <p class="tag">Espectador · elige cámara</p>
+      <p class="tag">Espectador · SFU Cloudflare</p>
     </div>
     <a class="btn" href="/">Inicio</a>
   </header>
   <div class="stage"><video id="remote" playsinline autoplay controls></video></div>
-  <div class="bar"><span class="status" id="st">Conectando…</span></div>
+  <div class="bar"><span class="status" id="st">Conectando sala…</span></div>
   <div class="cams" id="cams"></div>
   <pre class="out" id="log">—</pre>
 </div>
-<script type="module">
-import { wsUrl, createPeerConnection } from "./rtc.js";
+<script src="/hub.js"></script>
+<script>
+(function(){
+  const H = window.AlsetHub;
+  const matchId = H.qs("match","partido-demo");
+  const ticket = H.qs("ticket","");
+  const myId = "view-" + Math.random().toString(36).slice(2,8);
+  const st = document.getElementById("st");
+  const logEl = document.getElementById("log");
+  const camsEl = document.getElementById("cams");
+  const video = document.getElementById("remote");
+  let producers = [], activeId = null, pull = null;
 
-const params = new URLSearchParams(location.search);
-const matchId = params.get("match") || "partido-demo";
-const ticket = params.get("ticket") || "";
-const myId = "view-" + Math.random().toString(36).slice(2, 8);
+  function log(m){ logEl.textContent = typeof m === "string" ? m : JSON.stringify(m,null,2); }
+  log(H.diag());
 
-const st = document.getElementById("st");
-const logEl = document.getElementById("log");
-const camsEl = document.getElementById("cams");
-const video = document.getElementById("remote");
-let ws, producers = [], activeId = null, pc = null;
+  function renderCams(){
+    const online = producers.filter(function(p){ return p.online; });
+    camsEl.innerHTML = online.map(function(p){
+      var q = (p.quality||0) >= 0.7 ? "q" : (p.quality||0) >= 0.4 ? "q mid" : "q low";
+      var act = p.id === activeId ? "active" : "";
+      return '<div class="cam '+act+'" data-id="'+p.id+'"><strong>'+(p.label||p.id)+'</strong><div class="'+q+'">'+(Math.round((p.quality||0)*100))+'% · SFU '+(p.sfuSessionId? "sí":"no")+'</div></div>';
+    }).join("") || '<p class="muted">Sin cámaras. En otro móvil abre Transmitir con el mismo partido.</p>';
+    Array.prototype.forEach.call(camsEl.querySelectorAll(".cam"), function(el){
+      el.onclick = function(){ selectProducer(el.getAttribute("data-id")); };
+    });
+  }
 
-function log(m) { logEl.textContent = m; }
+  async function selectProducer(id){
+    if (!id) return;
+    activeId = id;
+    renderCams();
+    var p = producers.filter(function(x){ return x.id === id; })[0];
+    if (!p || !p.sfuSessionId || !p.tracks || !p.tracks.length) {
+      st.textContent = "Esa cámara aún no publicó tracks SFU";
+      log(p || "missing");
+      return;
+    }
+    st.textContent = "Suscribiendo SFU…";
+    try {
+      if (pull && pull.pc) try { pull.pc.close(); } catch(_){}
+      pull = await H.sfuPull(p.sfuSessionId, p.tracks);
+      video.srcObject = pull.stream;
+      await video.play().catch(function(){});
+      st.textContent = "Reproduciendo";
+      st.classList.add("on");
+      log({ pulling: id, session: pull.sessionId });
+    } catch (e) {
+      st.textContent = "Error SFU";
+      log(String(e.message || e));
+    }
+  }
 
-function renderCams() {
-  camsEl.innerHTML = producers.filter(p => p.online).map(p => {
-    const q = p.quality >= 0.7 ? "q" : p.quality >= 0.4 ? "q mid" : "q low";
-    const active = p.id === activeId ? "active" : "";
-    return `<div class="cam ${active}" data-id="${p.id}">
-      <strong>${escapeHtml(p.label || p.id)}</strong>
-      <div class="${q}">calidad ${(p.quality*100|0)}% · fps ${p.fps||"—"}</div>
-    </div>`;
-  }).join("") || `<p class="muted">No hay cámaras en vivo todavía. Abre /publish.html en un móvil.</p>`;
-  camsEl.querySelectorAll(".cam").forEach(el => {
-    el.onclick = () => selectProducer(el.dataset.id);
-  });
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-async function selectProducer(id) {
-  if (!id || id === activeId) return;
-  activeId = id;
-  renderCams();
-  st.textContent = "Conectando a " + id;
-  if (pc) { try { pc.close(); } catch(_){} pc = null; }
-  pc = createPeerConnection();
-  pc.ontrack = (e) => {
-    video.srcObject = e.streams[0];
-    st.textContent = "Reproduciendo";
-    st.classList.add("on");
+  var ws = new WebSocket(H.wsUrl(matchId, { role:"viewer", id: myId, ticket: ticket }));
+  ws.onopen = function(){ st.textContent = "Sala OK"; };
+  ws.onerror = function(){ st.textContent = "WS error"; log("No se pudo abrir WebSocket. URL: " + H.wsUrl(matchId,{role:"viewer",id:myId,ticket:ticket})); };
+  ws.onclose = function(ev){ st.textContent = "WS "+ev.code; if (ev.code === 4003) log("Ticket requerido o inválido"); };
+  ws.onmessage = function(ev){
+    var msg = JSON.parse(ev.data);
+    if (msg.type === "room_state" || msg.type === "presence") {
+      if (msg.meta && msg.meta.title) document.getElementById("title").textContent = msg.meta.title;
+      producers = msg.producers || producers;
+      renderCams();
+      if (!activeId) {
+        var best = producers.filter(function(p){return p.online && p.sfuSessionId;}).sort(function(a,b){return (b.quality||0)-(a.quality||0);})[0];
+        if (best) selectProducer(best.id);
+      }
+    }
+    if (msg.type === "producer_join") {
+      producers = producers.filter(function(p){return p.id !== msg.producer.id;}).concat([msg.producer]);
+      renderCams();
+    }
+    if (msg.type === "quality" && msg.producer) {
+      producers = producers.map(function(p){ return p.id === msg.id ? Object.assign({}, p, msg.producer) : p; });
+      renderCams();
+    }
+    if (msg.type === "program" && msg.producerId) selectProducer(msg.producerId);
   };
-  pc.onicecandidate = (e) => {
-    if (e.candidate && ws?.readyState === 1) {
-      ws.send(JSON.stringify({ type: "signal", to: id, data: { candidate: e.candidate } }));
-    }
-  };
-  // recvonly
-  pc.addTransceiver("video", { direction: "recvonly" });
-  pc.addTransceiver("audio", { direction: "recvonly" });
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  ws.send(JSON.stringify({ type: "signal", to: id, data: { offer } }));
-  renderCams();
-}
-
-ws = new WebSocket(wsUrl(matchId, { role: "viewer", id: myId, ticket }));
-ws.onopen = () => { st.textContent = "Sala conectada"; log("match " + matchId); };
-ws.onclose = (e) => { st.textContent = "Cerrado " + (e.code||""); st.classList.remove("on"); };
-ws.onmessage = async (ev) => {
-  const msg = JSON.parse(ev.data);
-  if (msg.type === "room_state" || msg.type === "presence") {
-    if (msg.meta?.title) document.getElementById("title").textContent = msg.meta.title;
-    producers = msg.producers || producers;
-    renderCams();
-    if (!activeId) {
-      const best = [...producers].filter(p=>p.online).sort((a,b)=>(b.quality||0)-(a.quality||0))[0];
-      if (best) selectProducer(best.id);
-    }
-  }
-  if (msg.type === "producer_join") {
-    producers = producers.filter(p => p.id !== msg.producer.id).concat([msg.producer]);
-    renderCams();
-  }
-  if (msg.type === "producer_leave") {
-    producers = producers.map(p => p.id === msg.id ? { ...p, online: false } : p);
-    renderCams();
-  }
-  if (msg.type === "quality") {
-    producers = producers.map(p => p.id === msg.id ? { ...p, ...msg.producer } : p);
-    renderCams();
-  }
-  if (msg.type === "program" && msg.producerId) {
-    selectProducer(msg.producerId);
-  }
-  if (msg.type === "signal" && msg.data && msg.from === activeId) {
-    if (msg.data.answer) {
-      await pc.setRemoteDescription(msg.data.answer);
-    } else if (msg.data.candidate) {
-      try { await pc.addIceCandidate(msg.data.candidate); } catch(_){}
-    }
-  }
-};
+})();
 </script>
 </body>
 </html>
+<!-- v021 -->
