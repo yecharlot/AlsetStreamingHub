@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
-<title>Transmitir · Alset Streaming</title>
+<title>Transmitir</title>
 <link rel="stylesheet" href="/styles.css"/>
 </head>
 <body>
@@ -12,75 +12,78 @@
   <header class="top">
     <div>
       <h1>Transmitir</h1>
-      <p class="tag">Cámara → SFU Cloudflare · este dispositivo hace el encode</p>
+      <p class="tag">Un toque · cámara en este teléfono</p>
     </div>
     <a class="btn" href="/">Inicio</a>
   </header>
   <div class="stage"><video id="local" muted playsinline autoplay></video></div>
   <div class="bar">
-    <button class="btn primary" id="btnStart" type="button">Iniciar cámara</button>
-    <button class="btn" id="btnStop" type="button" disabled>Detener</button>
+    <button class="btn primary" id="btnStart" type="button">Iniciar</button>
+    <button class="btn" id="btnStop" type="button" disabled>Parar</button>
     <span class="status" id="st">Listo</span>
   </div>
-  <pre class="out" id="log">Abre esta página por HTTPS en Chrome o Safari del teléfono.</pre>
+  <pre class="out" id="log">Pulsa Iniciar y acepta cámara/micrófono.</pre>
 </div>
 <script src="/hub.js"></script>
 <script>
-(function(){
-  const H = window.AlsetHub;
-  const matchId = H.qs("match","partido-demo");
-  const label = H.qs("label","Camara");
-  const myId = "pub-" + Math.random().toString(36).slice(2,8);
-  const logEl = document.getElementById("log");
-  const st = document.getElementById("st");
-  const video = document.getElementById("local");
-  let stream, ws, pub;
+(function () {
+  var H = window.AlsetHub;
+  var matchId = H.qs("match", "partido-demo");
+  var label = H.qs("label", "Camara");
+  var myId = "pub-" + Math.random().toString(36).slice(2, 8);
+  var logEl = document.getElementById("log");
+  var st = document.getElementById("st");
+  var video = document.getElementById("local");
+  var stream, ws, pub, mesh;
 
-  function log(m){ logEl.textContent = typeof m === "string" ? m : JSON.stringify(m,null,2); }
+  function log(m) {
+    logEl.textContent = typeof m === "string" ? m : JSON.stringify(m, null, 2);
+  }
 
-  log(H.diag());
-
-  document.getElementById("btnStart").onclick = async function(){
+  document.getElementById("btnStart").onclick = async function () {
     try {
-      st.textContent = "Pidiendo cámara…";
+      st.textContent = "Cámara…";
       stream = await H.getCam();
       video.srcObject = stream;
-      await video.play().catch(function(){});
-      st.textContent = "Publicando a SFU…";
+      video.play().catch(function () {});
+      st.textContent = "SFU…";
       pub = await H.sfuPublish(stream, myId);
-      st.textContent = "En vivo (SFU)";
+      st.textContent = "En vivo";
       st.classList.add("on");
       document.getElementById("btnStop").disabled = false;
-      connectWs(pub);
-      log({ ok:true, sessionId: pub.sessionId, tracks: pub.tracks, matchId: matchId });
+      connectWs();
+      log({ ok: true, mode: "sfu", sessionId: pub.sessionId, tracks: pub.tracks });
     } catch (e) {
       st.textContent = "Error";
-      log(String(e.message || e) + "\n\n" + JSON.stringify(H.diag(),null,2));
+      log(String(e.message || e));
     }
   };
 
-  document.getElementById("btnStop").onclick = function(){
-    try { stream && stream.getTracks().forEach(function(t){ t.stop(); }); } catch(_){}
-    try { pub && pub.pc && pub.pc.close(); } catch(_){}
-    try { ws && ws.close(); } catch(_){}
-    st.textContent = "Detenido";
+  document.getElementById("btnStop").onclick = function () {
+    try { stream && stream.getTracks().forEach(function (t) { t.stop(); }); } catch (_) {}
+    try { pub && pub.pc && pub.pc.close(); } catch (_) {}
+    try { mesh && mesh.close(); } catch (_) {}
+    try { ws && ws.close(); } catch (_) {}
+    st.textContent = "Parado";
     st.classList.remove("on");
   };
 
-  function connectWs(pub){
-    ws = new WebSocket(H.wsUrl(matchId, { role:"publisher", id: myId, label: label }));
-    ws.onopen = function(){
-      ws.send(JSON.stringify({
-        type: "sfu_publish",
-        sessionId: pub.sessionId,
-        tracks: pub.tracks
-      }));
+  function connectWs() {
+    ws = new WebSocket(H.wsUrl(matchId, { role: "publisher", id: myId, label: label }));
+    mesh = H.meshPublisherAttach(stream, ws, myId);
+    ws.onopen = function () {
+      ws.send(JSON.stringify({ type: "sfu_publish", sessionId: pub.sessionId, tracks: pub.tracks }));
     };
-    ws.onerror = function(){ log("WebSocket error — revisa red / URL wss"); };
-    ws.onclose = function(ev){ st.textContent = "WS cerrado " + (ev.code||""); };
-    setInterval(function(){
+    ws.onmessage = function (ev) {
+      var msg = JSON.parse(ev.data);
+      if (msg.type === "signal" && msg.data && mesh) {
+        mesh.handleSignal(msg.from, msg.data);
+      }
+    };
+    ws.onerror = function () { log("WebSocket error"); };
+    setInterval(function () {
       if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({ type:"quality", quality: 0.85, fps: 24, bitrate: 1 }));
+        ws.send(JSON.stringify({ type: "quality", quality: 0.9, fps: 24, bitrate: 1 }));
       }
     }, 5000);
   }
@@ -88,4 +91,3 @@
 </script>
 </body>
 </html>
-<!-- v021 -->

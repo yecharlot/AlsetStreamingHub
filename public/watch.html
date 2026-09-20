@@ -3,98 +3,138 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"/>
-<title>Ver · Alset Streaming</title>
+<title>Ver en vivo</title>
 <link rel="stylesheet" href="/styles.css"/>
 </head>
 <body>
 <div class="shell">
   <header class="top">
     <div>
-      <h1 id="title">Partido en vivo</h1>
-      <p class="tag">Espectador · SFU Cloudflare</p>
+      <h1 id="title">En vivo</h1>
+      <p class="tag">Elige cámara · se reproduce sola</p>
     </div>
     <a class="btn" href="/">Inicio</a>
   </header>
-  <div class="stage"><video id="remote" playsinline autoplay controls></video></div>
-  <div class="bar"><span class="status" id="st">Conectando sala…</span></div>
+  <div class="stage"><video id="remote" playsinline autoplay controls muted></video></div>
+  <div class="bar">
+    <span class="status" id="st">Conectando…</span>
+    <button class="btn" type="button" id="btnSound">Activar sonido</button>
+  </div>
   <div class="cams" id="cams"></div>
-  <pre class="out" id="log">—</pre>
+  <pre class="out" id="log">Esperando cámaras…</pre>
 </div>
 <script src="/hub.js"></script>
 <script>
-(function(){
-  const H = window.AlsetHub;
-  const matchId = H.qs("match","partido-demo");
-  const ticket = H.qs("ticket","");
-  const myId = "view-" + Math.random().toString(36).slice(2,8);
-  const st = document.getElementById("st");
-  const logEl = document.getElementById("log");
-  const camsEl = document.getElementById("cams");
-  const video = document.getElementById("remote");
-  let producers = [], activeId = null, pull = null;
+(function () {
+  var H = window.AlsetHub;
+  var matchId = H.qs("match", "partido-demo");
+  var ticket = H.qs("ticket", "");
+  var myId = "view-" + Math.random().toString(36).slice(2, 8);
+  var st = document.getElementById("st");
+  var logEl = document.getElementById("log");
+  var camsEl = document.getElementById("cams");
+  var video = document.getElementById("remote");
+  var producers = [];
+  var activeId = null;
+  var session = null; // sfu or mesh pull handle
+  var ws;
 
-  function log(m){ logEl.textContent = typeof m === "string" ? m : JSON.stringify(m,null,2); }
-  log(H.diag());
+  function log(m) {
+    logEl.textContent = typeof m === "string" ? m : JSON.stringify(m, null, 2);
+  }
 
-  function renderCams(){
-    const online = producers.filter(function(p){ return p.online; });
-    camsEl.innerHTML = online.map(function(p){
-      var q = (p.quality||0) >= 0.7 ? "q" : (p.quality||0) >= 0.4 ? "q mid" : "q low";
+  document.getElementById("btnSound").onclick = function () {
+    video.muted = false;
+    video.play().catch(function () {});
+  };
+
+  function renderCams() {
+    var online = producers.filter(function (p) { return p.online; });
+    camsEl.innerHTML = online.map(function (p) {
       var act = p.id === activeId ? "active" : "";
-      return '<div class="cam '+act+'" data-id="'+p.id+'"><strong>'+(p.label||p.id)+'</strong><div class="'+q+'">'+(Math.round((p.quality||0)*100))+'% · SFU '+(p.sfuSessionId? "sí":"no")+'</div></div>';
-    }).join("") || '<p class="muted">Sin cámaras. En otro móvil abre Transmitir con el mismo partido.</p>';
-    Array.prototype.forEach.call(camsEl.querySelectorAll(".cam"), function(el){
-      el.onclick = function(){ selectProducer(el.getAttribute("data-id")); };
+      return '<div class="cam ' + act + '" data-id="' + p.id + '"><strong>' +
+        (p.label || p.id) + '</strong><div class="q">' +
+        (p.sfuSessionId ? "SFU listo" : "conectando") + "</div></div>";
+    }).join("") || '<p class="muted">Nadie transmite aún. Abre Transmitir en el otro teléfono.</p>';
+    Array.prototype.forEach.call(camsEl.querySelectorAll(".cam"), function (el) {
+      el.onclick = function () { selectProducer(el.getAttribute("data-id")); };
     });
   }
 
-  async function selectProducer(id){
-    if (!id) return;
+  async function selectProducer(id) {
+    if (!id || !ws) return;
     activeId = id;
     renderCams();
-    var p = producers.filter(function(x){ return x.id === id; })[0];
-    if (!p || !p.sfuSessionId || !p.tracks || !p.tracks.length) {
-      st.textContent = "Esa cámara aún no publicó tracks SFU";
-      log(p || "missing");
-      return;
+    var p = producers.filter(function (x) { return x.id === id; })[0];
+    if (!p) return;
+
+    if (session && session.close) try { session.close(); } catch (_) {}
+    session = null;
+    st.textContent = "Conectando…";
+
+    // 1) Try SFU
+    if (p.sfuSessionId && p.tracks && p.tracks.length) {
+      try {
+        session = await H.sfuPull(p.sfuSessionId, p.tracks);
+        video.srcObject = session.stream;
+        video.muted = true;
+        await video.play().catch(function () {});
+        st.textContent = "Reproduciendo (SFU)";
+        st.classList.add("on");
+        log({ mode: "sfu", from: id, tracks: session.stream.getTracks().map(function (t) { return t.kind; }) });
+        return;
+      } catch (e) {
+        log("SFU falló, probando enlace directo: " + (e.message || e));
+      }
     }
-    st.textContent = "Suscribiendo SFU…";
+
+    // 2) Mesh fallback
     try {
-      if (pull && pull.pc) try { pull.pc.close(); } catch(_){}
-      pull = await H.sfuPull(p.sfuSessionId, p.tracks);
-      video.srcObject = pull.stream;
-      await video.play().catch(function(){});
-      st.textContent = "Reproduciendo";
-      st.classList.add("on");
-      log({ pulling: id, session: pull.sessionId });
+      session = await H.meshPull(ws, id, function (stream) {
+        video.srcObject = stream;
+        video.muted = true;
+        video.play().catch(function () {});
+        st.textContent = "Reproduciendo (directo)";
+        st.classList.add("on");
+      });
+      log({ mode: "mesh", from: id });
     } catch (e) {
-      st.textContent = "Error SFU";
+      st.textContent = "No se pudo ver";
       log(String(e.message || e));
     }
   }
 
-  var ws = new WebSocket(H.wsUrl(matchId, { role:"viewer", id: myId, ticket: ticket }));
-  ws.onopen = function(){ st.textContent = "Sala OK"; };
-  ws.onerror = function(){ st.textContent = "WS error"; log("No se pudo abrir WebSocket. URL: " + H.wsUrl(matchId,{role:"viewer",id:myId,ticket:ticket})); };
-  ws.onclose = function(ev){ st.textContent = "WS "+ev.code; if (ev.code === 4003) log("Ticket requerido o inválido"); };
-  ws.onmessage = function(ev){
+  ws = new WebSocket(H.wsUrl(matchId, { role: "viewer", id: myId, ticket: ticket }));
+  ws.onopen = function () { st.textContent = "Sala lista"; };
+  ws.onerror = function () { st.textContent = "Error de red"; log("WebSocket falló"); };
+  ws.onclose = function (ev) {
+    st.textContent = "Desconectado " + (ev.code || "");
+    if (ev.code === 4003) log("Necesitas un ticket válido");
+  };
+  ws.onmessage = function (ev) {
     var msg = JSON.parse(ev.data);
     if (msg.type === "room_state" || msg.type === "presence") {
       if (msg.meta && msg.meta.title) document.getElementById("title").textContent = msg.meta.title;
       producers = msg.producers || producers;
       renderCams();
       if (!activeId) {
-        var best = producers.filter(function(p){return p.online && p.sfuSessionId;}).sort(function(a,b){return (b.quality||0)-(a.quality||0);})[0];
+        var best = producers.filter(function (p) { return p.online; })[0];
         if (best) selectProducer(best.id);
       }
     }
     if (msg.type === "producer_join") {
-      producers = producers.filter(function(p){return p.id !== msg.producer.id;}).concat([msg.producer]);
+      producers = producers.filter(function (p) { return p.id !== msg.producer.id; }).concat([msg.producer]);
       renderCams();
+      if (!activeId && msg.producer.online) selectProducer(msg.producer.id);
     }
     if (msg.type === "quality" && msg.producer) {
-      producers = producers.map(function(p){ return p.id === msg.id ? Object.assign({}, p, msg.producer) : p; });
+      producers = producers.map(function (p) {
+        return p.id === msg.id ? Object.assign({}, p, msg.producer) : p;
+      });
       renderCams();
+    }
+    if (msg.type === "signal" && msg.from === activeId && session && session.handleSignal) {
+      session.handleSignal(msg.data);
     }
     if (msg.type === "program" && msg.producerId) selectProducer(msg.producerId);
   };
@@ -102,4 +142,3 @@
 </script>
 </body>
 </html>
-<!-- v021 -->
