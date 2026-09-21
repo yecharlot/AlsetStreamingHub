@@ -2,94 +2,363 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Director · Alset Streaming</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"/>
+<title>Producción · Alset Streaming</title>
 <link rel="stylesheet" href="/styles.css"/>
 </head>
 <body>
-<div class="shell">
+<div class="shell wide">
   <header class="top">
     <div>
-      <h1>Director</h1>
-      <p class="tag">Elige la cámara programa · se empuja a los espectadores</p>
+      <h1>Mesa de <span>producción</span></h1>
+      <p class="tag">Previews · elige la mejor · zoom · captura · giro 3D · programa al aire</p>
     </div>
-    <a class="btn" href="/">Inicio</a>
+    <div class="row" style="margin:0">
+      <span class="badge">híbrido SFU + mesh</span>
+      <a class="btn" href="/">Inicio</a>
+    </div>
   </header>
-  <div class="stage"><video id="remote" playsinline autoplay controls></video></div>
-  <div class="bar">
-    <span class="status" id="st">Conectando…</span>
-    <button class="btn primary" id="btnProg" disabled>Marcar como programa</button>
+
+  <div class="toolbar" id="tools">
+    <button type="button" class="btn primary" id="btnProg">Al aire</button>
+    <button type="button" class="btn" id="btnBest">Mejor señal</button>
+    <button type="button" class="btn" id="btnZoomOut">− Zoom</button>
+    <input type="range" id="zoom" min="1" max="3" step="0.05" value="1" title="Zoom"/>
+    <button type="button" class="btn" id="btnZoomIn">+ Zoom</button>
+    <button type="button" class="btn" id="btnRotL">⟲ 3D</button>
+    <input type="range" id="rotY" min="-35" max="35" step="1" value="0" title="Giro Y"/>
+    <input type="range" id="rotX" min="-25" max="25" step="1" value="0" title="Giro X"/>
+    <button type="button" class="btn" id="btnRotR">3D ⟳</button>
+    <button type="button" class="btn" id="btnReset">Reset vista</button>
+    <button type="button" class="btn" id="btnSnap">Captura</button>
+    <span class="status" id="st">Conectando sala…</span>
   </div>
+
+  <div class="stage-wrap">
+    <div class="stage" id="stage">
+      <video id="program" playsinline autoplay controls muted></video>
+      <div class="hud">
+        <span id="hudCam">—</span>
+        <span id="hudMeta">zoom 1.0×</span>
+      </div>
+    </div>
+  </div>
+  <img id="snap" class="snap-preview" alt="captura"/>
+
+  <h2>Previews (móviles en vivo)</h2>
+  <p class="muted">Toca un preview para llevarlo al programa. El contorno verde sugiere la mejor calidad reportada.</p>
   <div class="cams" id="cams"></div>
+  <pre class="out" id="log">—</pre>
 </div>
-<script type="module">
-import { wsUrl, createPeerConnection } from "./rtc.js";
-const params = new URLSearchParams(location.search);
-const matchId = params.get("match") || "partido-demo";
-const ticket = params.get("ticket") || "";
-const myId = "dir-" + Math.random().toString(36).slice(2, 8);
-let ws, producers = [], activeId = null, pc = null;
-const st = document.getElementById("st");
-const video = document.getElementById("remote");
-const camsEl = document.getElementById("cams");
-const btnProg = document.getElementById("btnProg");
+<script src="/hub.js"></script>
+<script>
+(function () {
+  var H = window.AlsetHub;
+  var matchId = H.qs("match", "partido-demo");
+  var ticket = H.qs("ticket", "");
+  var myId = "dir-" + Math.random().toString(36).slice(2, 8);
 
-function renderCams() {
-  camsEl.innerHTML = producers.filter(p=>p.online).map(p=>{
-    const q = p.quality>=0.7?"q":p.quality>=0.4?"q mid":"q low";
-    return `<div class="cam ${p.id===activeId?"active":""}" data-id="${p.id}">
-      <strong>${p.label||p.id}</strong>
-      <div class="${q}">${(p.quality*100|0)}%</div></div>`;
-  }).join("") || `<p class="muted">Sin cámaras</p>`;
-  camsEl.querySelectorAll(".cam").forEach(el=>el.onclick=()=>preview(el.dataset.id));
-}
+  var st = document.getElementById("st");
+  var logEl = document.getElementById("log");
+  var camsEl = document.getElementById("cams");
+  var program = document.getElementById("program");
+  var stage = document.getElementById("stage");
+  var hudCam = document.getElementById("hudCam");
+  var hudMeta = document.getElementById("hudMeta");
 
-async function preview(id) {
-  activeId = id;
-  btnProg.disabled = false;
-  renderCams();
-  if (pc) { pc.close(); pc = null; }
-  pc = createPeerConnection();
-  pc.ontrack = (e) => { video.srcObject = e.streams[0]; st.textContent = "Preview " + id; st.classList.add("on"); };
-  pc.onicecandidate = (e) => {
-    if (e.candidate && ws?.readyState===1)
-      ws.send(JSON.stringify({ type:"signal", to:id, data:{ candidate:e.candidate }}));
+  var producers = [];
+  var activeId = null;
+  var programSession = null;
+  var previewSessions = {}; // id -> { close, videoEl }
+  var ws;
+  var zoom = 1, rotX = 0, rotY = 0;
+  var MAX_PREVIEWS = 6;
+
+  function log(m) {
+    logEl.textContent = typeof m === "string" ? m : JSON.stringify(m, null, 2);
+  }
+
+  function applyView() {
+    var v = program;
+    v.style.transform =
+      "translateZ(0) scale(" + zoom + ") rotateX(" + rotX + "deg) rotateY(" + rotY + "deg)";
+    stage.style.transform = "rotateX(" + rotX * 0.15 + "deg) rotateY(" + rotY * 0.2 + "deg)";
+    hudMeta.textContent = "zoom " + zoom.toFixed(2) + "× · 3D " + rotY + "°/" + rotX + "°";
+  }
+
+  document.getElementById("zoom").oninput = function (e) {
+    zoom = parseFloat(e.target.value);
+    applyView();
   };
-  pc.addTransceiver("video", { direction:"recvonly" });
-  pc.addTransceiver("audio", { direction:"recvonly" });
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  ws.send(JSON.stringify({ type:"signal", to:id, data:{ offer }}));
-}
+  document.getElementById("rotY").oninput = function (e) {
+    rotY = parseFloat(e.target.value);
+    applyView();
+  };
+  document.getElementById("rotX").oninput = function (e) {
+    rotX = parseFloat(e.target.value);
+    applyView();
+  };
+  document.getElementById("btnZoomIn").onclick = function () {
+    zoom = Math.min(3, zoom + 0.15);
+    document.getElementById("zoom").value = zoom;
+    applyView();
+  };
+  document.getElementById("btnZoomOut").onclick = function () {
+    zoom = Math.max(1, zoom - 0.15);
+    document.getElementById("zoom").value = zoom;
+    applyView();
+  };
+  document.getElementById("btnRotL").onclick = function () {
+    rotY = Math.max(-35, rotY - 5);
+    document.getElementById("rotY").value = rotY;
+    applyView();
+  };
+  document.getElementById("btnRotR").onclick = function () {
+    rotY = Math.min(35, rotY + 5);
+    document.getElementById("rotY").value = rotY;
+    applyView();
+  };
+  document.getElementById("btnReset").onclick = function () {
+    zoom = 1; rotX = 0; rotY = 0;
+    document.getElementById("zoom").value = 1;
+    document.getElementById("rotX").value = 0;
+    document.getElementById("rotY").value = 0;
+    applyView();
+  };
 
-btnProg.onclick = () => {
-  if (!activeId || !ws) return;
-  ws.send(JSON.stringify({ type:"program", producerId: activeId }));
-  st.textContent = "Programa → " + activeId;
-};
+  document.getElementById("btnSnap").onclick = function () {
+    try {
+      var c = document.createElement("canvas");
+      c.width = program.videoWidth || 1280;
+      c.height = program.videoHeight || 720;
+      if (!c.width) throw new Error("Sin frame aún");
+      c.getContext("2d").drawImage(program, 0, 0, c.width, c.height);
+      var url = c.toDataURL("image/jpeg", 0.92);
+      var img = document.getElementById("snap");
+      img.src = url;
+      img.style.display = "block";
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "alset-captura-" + Date.now() + ".jpg";
+      a.click();
+      log("Captura " + c.width + "×" + c.height);
+    } catch (e) {
+      log("Captura: " + (e.message || e));
+    }
+  };
 
-ws = new WebSocket(wsUrl(matchId, { role:"director", id:myId, ticket }));
-ws.onopen = () => st.textContent = "Director listo";
-ws.onmessage = async (ev) => {
-  const msg = JSON.parse(ev.data);
-  if (msg.type==="room_state" || msg.type==="presence") {
-    producers = msg.producers||[];
-    renderCams();
+  document.getElementById("btnProg").onclick = function () {
+    if (!activeId || !ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: "program", producerId: activeId }));
+    st.textContent = "Programa → " + activeId;
+  };
+
+  document.getElementById("btnBest").onclick = function () {
+    var best = bestProducer();
+    if (best) selectProgram(best.id);
+  };
+
+  function bestProducer() {
+    return producers
+      .filter(function (p) { return p.online; })
+      .sort(function (a, b) { return (b.quality || 0) - (a.quality || 0); })[0];
   }
-  if (msg.type==="producer_join") {
-    producers = producers.filter(p=>p.id!==msg.producer.id).concat([msg.producer]);
-    renderCams();
+
+  function qClass(q) {
+    if (q >= 0.7) return "q";
+    if (q >= 0.4) return "q mid";
+    return "q low";
   }
-  if (msg.type==="quality") {
-    producers = producers.map(p=>p.id===msg.id?{...p,...msg.producer}:p);
-    renderCams();
+
+  function renderList() {
+    var online = producers.filter(function (p) { return p.online; });
+    var best = bestProducer();
+    camsEl.innerHTML = online
+      .map(function (p) {
+        var act = p.id === activeId ? "active" : "";
+        var bestCls = best && best.id === p.id ? "best" : "";
+        return (
+          '<div class="cam ' + act + " " + bestCls + '" data-id="' + p.id + '">' +
+          '<video muted playsinline autoplay data-vid="' + p.id + '"></video>' +
+          "<strong>" + (p.label || p.id) + "</strong>" +
+          '<div class="' + qClass(p.quality || 0) + '">' +
+          Math.round((p.quality || 0) * 100) + "% · " +
+          (p.sfuSessionId ? "SFU" : "mesh") +
+          "</div></div>"
+        );
+      })
+      .join("") || '<p class="muted">Ningún móvil transmitiendo. Abre /publish.html en los teléfonos.</p>';
+
+    Array.prototype.forEach.call(camsEl.querySelectorAll(".cam"), function (el) {
+      el.onclick = function () {
+        selectProgram(el.getAttribute("data-id"));
+      };
+    });
+
+    // Attach preview streams (cap concurrent)
+    online.slice(0, MAX_PREVIEWS).forEach(function (p) {
+      ensurePreview(p);
+    });
+    // Close previews for offline
+    Object.keys(previewSessions).forEach(function (id) {
+      if (!online.find(function (p) { return p.id === id; })) {
+        try { previewSessions[id].close(); } catch (_) {}
+        delete previewSessions[id];
+      }
+    });
   }
-  if (msg.type==="signal" && msg.from===activeId && msg.data) {
-    if (msg.data.answer) await pc.setRemoteDescription(msg.data.answer);
-    else if (msg.data.candidate) try { await pc.addIceCandidate(msg.data.candidate); } catch(_){}
+
+  async function ensurePreview(p) {
+    var videoEl = camsEl.querySelector('video[data-vid="' + p.id + '"]');
+    if (!videoEl) return;
+    if (previewSessions[p.id] && previewSessions[p.id].videoEl === videoEl) {
+      // already bound; if has stream ok
+      return;
+    }
+    if (previewSessions[p.id]) {
+      try { previewSessions[p.id].close(); } catch (_) {}
+      delete previewSessions[p.id];
+    }
+
+    var closed = false;
+    var handle = { videoEl: videoEl, close: function () { closed = true; } };
+
+    try {
+      if (p.sfuSessionId && p.tracks && p.tracks.length) {
+        var pull = await H.sfuPull(p.sfuSessionId, p.tracks);
+        if (closed) {
+          pull.pc.close();
+          return;
+        }
+        videoEl.srcObject = pull.stream;
+        videoEl.play().catch(function () {});
+        handle.close = function () {
+          closed = true;
+          try { pull.pc.close(); } catch (_) {}
+        };
+        previewSessions[p.id] = handle;
+        return;
+      }
+      // mesh preview
+      if (!ws || ws.readyState !== 1) return;
+      var mesh = await H.meshPull(ws, p.id, function (stream) {
+        videoEl.srcObject = stream;
+        videoEl.play().catch(function () {});
+      });
+      handle.close = function () {
+        closed = true;
+        try { mesh.close(); } catch (_) {}
+      };
+      handle.mesh = mesh;
+      previewSessions[p.id] = handle;
+    } catch (e) {
+      console.warn("preview", p.id, e);
+    }
   }
-};
+
+  async function selectProgram(id) {
+    if (!id) return;
+    activeId = id;
+    var p = producers.filter(function (x) { return x.id === id; })[0];
+    hudCam.textContent = (p && (p.label || p.id)) || id;
+    renderList();
+    st.textContent = "Cargando programa…";
+
+    if (programSession && programSession.close) {
+      try { programSession.close(); } catch (_) {}
+      programSession = null;
+    }
+
+    // Prefer reusing preview stream if present (ligero: no segunda suscripción)
+    var prev = previewSessions[id];
+    var vPrev = camsEl.querySelector('video[data-vid="' + id + '"]');
+    if (vPrev && vPrev.srcObject) {
+      program.srcObject = vPrev.srcObject;
+      program.muted = true;
+      program.play().catch(function () {});
+      st.textContent = "Programa (preview)";
+      st.classList.add("on");
+      programSession = {
+        close: function () {},
+        handleSignal: prev && prev.mesh ? prev.mesh.handleSignal.bind(prev.mesh) : null,
+      };
+      return;
+    }
+
+    if (p && p.sfuSessionId && p.tracks && p.tracks.length) {
+      try {
+        programSession = await H.sfuPull(p.sfuSessionId, p.tracks);
+        program.srcObject = programSession.stream;
+        program.muted = true;
+        await program.play().catch(function () {});
+        st.textContent = "Programa (SFU)";
+        st.classList.add("on");
+        return;
+      } catch (e) {
+        log("SFU programa: " + (e.message || e));
+      }
+    }
+
+    try {
+      programSession = await H.meshPull(ws, id, function (stream) {
+        program.srcObject = stream;
+        program.muted = true;
+        program.play().catch(function () {});
+        st.textContent = "Programa (mesh)";
+        st.classList.add("on");
+      });
+    } catch (e) {
+      st.textContent = "Sin video";
+      log(String(e.message || e));
+    }
+  }
+
+  ws = new WebSocket(H.wsUrl(matchId, { role: "director", id: myId, ticket: ticket }));
+  ws.onopen = function () {
+    st.textContent = "Sala lista";
+  };
+  ws.onerror = function () {
+    st.textContent = "Error WS";
+  };
+  ws.onmessage = function (ev) {
+    var msg = JSON.parse(ev.data);
+    if (msg.type === "room_state" || msg.type === "presence") {
+      producers = msg.producers || producers;
+      renderList();
+      if (!activeId) {
+        var b = bestProducer();
+        if (b) selectProgram(b.id);
+      }
+    }
+    if (msg.type === "producer_join") {
+      producers = producers.filter(function (p) { return p.id !== msg.producer.id; }).concat([msg.producer]);
+      renderList();
+    }
+    if (msg.type === "producer_leave") {
+      producers = producers.map(function (p) {
+        return p.id === msg.id ? Object.assign({}, p, { online: false }) : p;
+      });
+      renderList();
+    }
+    if (msg.type === "quality" && msg.producer) {
+      producers = producers.map(function (p) {
+        return p.id === msg.id ? Object.assign({}, p, msg.producer) : p;
+      });
+      renderList();
+    }
+    if (msg.type === "signal" && msg.from === activeId && programSession && programSession.handleSignal) {
+      programSession.handleSignal(msg.data);
+    }
+    // relay signals to preview mesh sessions
+    if (msg.type === "signal" && previewSessions[msg.from] && previewSessions[msg.from].mesh) {
+      previewSessions[msg.from].mesh.handleSignal(msg.data);
+    }
+  };
+
+  applyView();
+  log({ match: matchId, role: "director", hybrid: "sfu+mesh", previews: MAX_PREVIEWS });
+})();
 </script>
 </body>
 </html>
-<!-- v021 -->
+<!-- prod-1789961881 -->
