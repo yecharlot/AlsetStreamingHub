@@ -52,3 +52,17 @@ curl -X POST /api/room/partido-1/end
 npx wrangler deploy
 # Migración v2-saas crea el DO SaaSRegistry
 ```
+
+
+## Cobros
+
+- **Ahora:** Transfermóvil (titular, teléfono, últimos 4, banco, monto, instrucciones) en `POST /api/saas/payments`.
+- **Página pública:** `/pay.html?match=EVENTO` → `GET /api/pay/match/:id`.
+- **Futuro:** campos Stripe / PayPal / Payoneer guardados; integración online pendiente.
+- **Flujo actual:** cliente paga → organizador confirma → genera ticket en consola.
+
+## Uso
+
+`GET /api/saas/usage` — eventos, tickets, picos, historial.
+
+TURN (redes difíciles): aplazado a próxima versión.

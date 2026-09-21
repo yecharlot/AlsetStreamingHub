@@ -66,6 +66,24 @@ export default {
         return json({ ok: true, result });
       }
 
+
+      // Público: datos de pago del organizador del match
+      const payMatch = url.pathname.match(/^\/api\/pay\/match\/([^/]+)$/);
+      if (payMatch && request.method === "GET") {
+        const matchId = sanitizeId(payMatch[1]);
+        const stub = env.ROOM.get(env.ROOM.idFromName(matchId));
+        const st = await stub.fetch(new Request(new URL("/state", url.origin)));
+        const room = await st.json().catch(() => ({}));
+        const orgId = room.meta && room.meta.orgId;
+        if (!orgId || !env.SAAS) {
+          return json({ ok: true, matchId, payments: { activeProvider: "none" }, message: "Sin org o pagos configurados" });
+        }
+        const reg = env.SAAS.get(env.SAAS.idFromName("global"));
+        const pr = await reg.fetch(new Request("https://saas/pay/" + orgId));
+        const data = await pr.json();
+        return json({ ...data, matchId, title: room.meta && room.meta.title });
+      }
+
       // —— Room helpers ——
       const roomState = url.pathname.match(/^\/api\/room\/([^/]+)\/state$/);
       if (roomState && request.method === "GET") {

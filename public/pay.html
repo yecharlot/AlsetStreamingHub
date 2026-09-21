@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pagar acceso · Alset Streaming</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#0b0f14;color:#e8eef5;margin:0;padding:1.2rem;max-width:520px;margin-inline:auto}
+.card{background:#121a22;border:1px solid #1e2a36;border-radius:14px;padding:1.1rem}
+h1{font-size:1.2rem} .muted{color:#8a9bb0;font-size:.9rem;line-height:1.45}
+.row{margin:.55rem 0;padding:.55rem 0;border-bottom:1px solid #1e2a36}
+.row b{display:block;font-size:.72rem;color:#8a9bb0;text-transform:uppercase}
+.amount{font-size:1.4rem;color:#f5a524;font-weight:800}
+a{color:#6eb6ff}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1 id="title">Acceso al evento</h1>
+    <p class="muted" id="org">—</p>
+    <div id="box">Cargando datos de pago…</div>
+    <p class="muted" style="margin-top:1rem">Tras pagar, el organizador te enviará el <strong>ticket</strong> para entrar a ver el stream.</p>
+    <p class="muted"><a id="watchLink" href="/watch.html">Ir a la sala de visualización</a></p>
+  </div>
+<script>
+(async function(){
+  const q = new URLSearchParams(location.search);
+  const match = q.get('match') || 'partido-demo';
+  document.getElementById('watchLink').href = '/watch.html?match=' + encodeURIComponent(match);
+  try {
+    const d = await (await fetch('/api/pay/match/' + encodeURIComponent(match))).json();
+    document.getElementById('title').textContent = d.title || match;
+    document.getElementById('org').textContent = (d.org && d.org.name) ? ('Organiza: ' + d.org.name) : '';
+    const p = d.payments || {};
+    const box = document.getElementById('box');
+    if (p.activeProvider === 'transfermovil' && p.transfermovil) {
+      const t = p.transfermovil;
+      box.innerHTML =
+        (t.amountHint ? '<div class="amount">' + t.amountHint + (t.currency ? ' ' + t.currency : '') + '</div>' : '') +
+        '<div class="row"><b>Titular</b>' + (t.holderName || '—') + '</div>' +
+        '<div class="row"><b>Transfermóvil</b>' + (t.phone || '—') + '</div>' +
+        '<div class="row"><b>Tarjeta (últimos 4)</b>' + (t.cardLast4 ? ('•••• ' + t.cardLast4) : '—') + '</div>' +
+        '<div class="row"><b>Banco</b>' + (t.cardBank || '—') + '</div>' +
+        (t.accountHint ? '<div class="row"><b>Referencia</b>' + t.accountHint + '</div>' : '') +
+        '<p class="muted" style="margin-top:.8rem">' + (t.instructions || '') + '</p>';
+    } else if (p.activeProvider === 'paypal' && p.paypal && p.paypal.meLink) {
+      box.innerHTML = '<p>PayPal: <a href="' + p.paypal.meLink + '" target="_blank" rel="noopener">Pagar</a></p><p class="muted">' + (p.paypal.note||'') + '</p>';
+    } else {
+      box.innerHTML = '<p class="muted">El organizador aún no configuró datos de pago públicos, o el cobro es manual.</p>';
+    }
+  } catch (e) {
+    document.getElementById('box').textContent = 'No se pudieron cargar los datos de pago.';
+  }
+})();
+</script>
+</body>
+</html>

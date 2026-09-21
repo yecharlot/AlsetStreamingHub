@@ -3,147 +3,295 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Alset Streaming · Consola SaaS</title>
-<link rel="stylesheet" href="/styles.css">
+<title>Alset Streaming · Panel SaaS</title>
 <style>
-  body{font-family:system-ui,sans-serif;max-width:720px;margin:0 auto;padding:1.2rem;background:#0b0f14;color:#e8eef5}
-  h1{font-size:1.35rem} h2{font-size:1.05rem;margin-top:1.2rem}
-  .card{background:#121a22;border:1px solid #1e2a36;border-radius:12px;padding:1rem;margin:.7rem 0}
-  input,select,button{font:inherit;padding:.55rem .7rem;border-radius:8px;border:1px solid #2a3a4a;background:#0e151c;color:#e8eef5}
-  button{background:#3d8bfd;border-color:#3d8bfd;color:#fff;cursor:pointer;font-weight:600}
-  button.secondary{background:transparent;color:#9db0c2}
-  button.danger{background:#c23b5a;border-color:#c23b5a}
-  label{display:block;font-size:.75rem;color:#8a9bb0;margin:.4rem 0 .2rem}
-  .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:end}
-  .row > *{flex:1;min-width:120px}
-  .mono{font-family:ui-monospace,monospace;font-size:.8rem;word-break:break-all}
-  .ok{color:#3dd68c} .muted{color:#8a9bb0;font-size:.85rem}
-  a{color:#6eb6ff}
-  .links a{display:inline-block;margin:.2rem .5rem .2rem 0}
+:root{--bg:#0b0f14;--card:#121a22;--line:#1e2a36;--txt:#e8eef5;--mut:#8a9bb0;--acc:#3d8bfd;--ok:#3dd68c;--warn:#f5a524}
+*{box-sizing:border-box}
+body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--txt)}
+.top{padding:.9rem 1.1rem;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap}
+.wrap{max-width:900px;margin:0 auto;padding:1rem}
+.tabs{display:flex;gap:.35rem;flex-wrap:wrap;margin-bottom:1rem}
+.tabs button{background:transparent;border:1px solid var(--line);color:var(--mut);padding:.45rem .75rem;border-radius:999px;cursor:pointer}
+.tabs button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1rem;margin-bottom:.75rem}
+h1{font-size:1.15rem;margin:0} h2{font-size:1rem;margin:0 0 .6rem}
+label{display:block;font-size:.72rem;color:var(--mut);margin:.45rem 0 .2rem;text-transform:uppercase;letter-spacing:.03em}
+input,select,textarea{width:100%;padding:.55rem .65rem;border-radius:8px;border:1px solid var(--line);background:#0e151c;color:var(--txt);font:inherit}
+textarea{min-height:80px}
+button.btn{background:var(--acc);border:none;color:#fff;padding:.55rem .9rem;border-radius:8px;font-weight:600;cursor:pointer;margin-top:.5rem}
+button.btn.sec{background:transparent;border:1px solid var(--line);color:var(--txt)}
+button.btn.danger{background:#c23b5a}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
+@media(max-width:600px){.row{grid-template-columns:1fr}}
+.mono{font-family:ui-monospace,monospace;font-size:.78rem;word-break:break-all;white-space:pre-wrap}
+.muted{color:var(--mut);font-size:.85rem}
+.stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:.5rem}
+.stat div{background:#0e151c;border-radius:10px;padding:.7rem;border:1px solid var(--line)}
+.stat b{display:block;font-size:1.2rem}
+.hidden{display:none!important}
+a{color:#6eb6ff}
+.ok{color:var(--ok)}
 </style>
 </head>
 <body>
-  <h1>Alset Streaming Hub · SaaS</h1>
-  <p class="muted">Genes de borde: nacen con cada cámara/viewer y se destruyen al cerrar el evento. SFU cuando el plan lo exige.</p>
+<header class="top">
+  <div><h1>Alset Streaming · Panel</h1><div class="muted">Transfermóvil ahora · Stripe/PayPal/Payoneer después</div></div>
+  <input id="apiKey" placeholder="API key ash_…" style="max-width:280px;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--line);background:#0e151c;color:var(--txt)">
+</header>
+<div class="wrap">
+  <div class="tabs" id="tabs">
+    <button type="button" class="on" data-t="start">Inicio</button>
+    <button type="button" data-t="pay">Cobros</button>
+    <button type="button" data-t="events">Eventos</button>
+    <button type="button" data-t="usage">Uso</button>
+    <button type="button" data-t="genes">Genes</button>
+  </div>
 
-  <div class="card">
-    <h2>1. Crear organización</h2>
-    <div class="row">
-      <div><label>Nombre</label><input id="orgName" placeholder="Club Guantánamo"></div>
-      <div><label>Plan</label>
-        <select id="orgPlan"><option value="free">Free</option><option value="pro">Pro</option><option value="event">Evento</option></select>
+  <section id="t-start">
+    <div class="card">
+      <h2>Crear organización</h2>
+      <div class="row">
+        <div><label>Nombre</label><input id="orgName" placeholder="Mi productora / club"></div>
+        <div><label>Plan</label>
+          <select id="orgPlan"><option value="free">Free</option><option value="pro">Pro</option><option value="event">Evento</option></select>
+        </div>
       </div>
+      <button type="button" class="btn" id="btnCreateOrg">Crear y obtener API key</button>
+      <p class="mono" id="orgOut"></p>
     </div>
-    <button id="btnCreateOrg" style="margin-top:.6rem">Crear y obtener API key</button>
-    <p class="mono" id="orgOut"></p>
-  </div>
-
-  <div class="card">
-    <h2>2. API key (guarda esto)</h2>
-    <input id="apiKey" placeholder="ash_…" style="width:100%">
-    <button id="btnMe" class="secondary" style="margin-top:.5rem">Ver mi plan</button>
-    <pre class="mono" id="meOut"></pre>
-  </div>
-
-  <div class="card">
-    <h2>3. Bootstrap evento (spawn room gene)</h2>
-    <div class="row">
-      <div><label>Match ID</label><input id="matchId" value="partido-demo"></div>
-      <div><label>Título</label><input id="matchTitle" value="Partido en vivo"></div>
+    <div class="card">
+      <h2>Sesión</h2>
+      <button type="button" class="btn sec" id="btnMe">Actualizar datos de mi cuenta</button>
+      <pre class="mono" id="meOut"></pre>
     </div>
-    <button id="btnBoot" style="margin-top:.6rem">Crear / abrir sala</button>
-    <button id="btnEnd" class="danger" style="margin-top:.6rem">Terminar evento (destruir genes)</button>
-    <pre class="mono" id="bootOut"></pre>
-    <div class="links" id="links"></div>
-  </div>
+  </section>
 
-  <div class="card">
-    <h2>4. Tickets de acceso</h2>
-    <div class="row">
-      <div><label>Max usos</label><input id="maxUses" type="number" value="50"></div>
-      <div><label>Label</label><input id="ticketLabel" value="entrada"></div>
+  <section id="t-pay" class="hidden">
+    <div class="card">
+      <h2>Proveedor de cobro activo</h2>
+      <label>Método</label>
+      <select id="payProvider">
+        <option value="transfermovil">Transfermóvil (Cuba)</option>
+        <option value="stripe">Stripe (futuro)</option>
+        <option value="paypal">PayPal (futuro)</option>
+        <option value="payoneer">Payoneer (futuro)</option>
+        <option value="none">Sin cobro automático</option>
+      </select>
+      <p class="muted">Hoy opera Transfermóvil. Los otros quedan configurables para cuando actives la integración.</p>
     </div>
-    <button id="btnTicket" style="margin-top:.6rem">Generar ticket</button>
-    <pre class="mono" id="ticketOut"></pre>
-  </div>
+    <div class="card" id="boxTm">
+      <h2>Datos Transfermóvil / tarjeta</h2>
+      <div class="row">
+        <div><label>Titular</label><input id="tmHolder" placeholder="Nombre y apellidos"></div>
+        <div><label>Teléfono Transfermóvil</label><input id="tmPhone" placeholder="53…"></div>
+      </div>
+      <div class="row">
+        <div><label>Últimos 4 dígitos tarjeta</label><input id="tmLast4" maxlength="4" placeholder="1234"></div>
+        <div><label>Banco</label><input id="tmBank" placeholder="BANDEC / BPA / METROPOLITANO"></div>
+      </div>
+      <div class="row">
+        <div><label>Moneda</label><select id="tmCur"><option>CUP</option><option>USD</option><option>MLC</option></select></div>
+        <div><label>Monto orientativo</label><input id="tmAmount" placeholder="ej. 150 CUP"></div>
+      </div>
+      <label>Hint cuenta (opcional)</label>
+      <input id="tmHint" placeholder="Alias o referencia extra">
+      <label>Instrucciones al cliente</label>
+      <textarea id="tmInstr">Realiza el pago por Transfermóvil. En el concepto escribe el nombre del evento y tu nombre. Cuando confirmemos, te enviamos el ticket.</textarea>
+      <button type="button" class="btn" id="btnSavePay">Guardar cobros</button>
+      <p class="mono" id="payOut"></p>
+    </div>
+    <div class="card">
+      <h2>Futuro · Stripe / PayPal / Payoneer</h2>
+      <div class="row">
+        <div><label>Stripe publishable key</label><input id="stKey" placeholder="pk_… (luego)"></div>
+        <div><label>Stripe price id</label><input id="stPrice" placeholder="price_…"></div>
+      </div>
+      <div class="row">
+        <div><label>PayPal.me / link</label><input id="ppLink" placeholder="https://paypal.me/…"></div>
+        <div><label>Payoneer email</label><input id="poEmail" placeholder="email@…"></div>
+      </div>
+      <p class="muted">Se guardan; el cobro online automático se activará en una versión posterior.</p>
+    </div>
+  </section>
 
-  <div class="card">
-    <h2>5. Enjambre en vivo</h2>
-    <button id="btnGenes" class="secondary">Ver genes de la sala</button>
-    <button id="btnLive" class="secondary">Eventos live (registry)</button>
-    <pre class="mono" id="genesOut"></pre>
-  </div>
+  <section id="t-events" class="hidden">
+    <div class="card">
+      <h2>Evento</h2>
+      <div class="row">
+        <div><label>Match ID</label><input id="matchId" value="partido-demo"></div>
+        <div><label>Título</label><input id="matchTitle" value="Partido en vivo"></div>
+      </div>
+      <button type="button" class="btn" id="btnBoot">Abrir sala (bootstrap gene)</button>
+      <button type="button" class="btn danger" id="btnEnd">Terminar y destruir genes</button>
+      <pre class="mono" id="bootOut"></pre>
+      <div id="links" class="muted"></div>
+      <p class="muted" id="payLink"></p>
+    </div>
+    <div class="card">
+      <h2>Tickets de acceso</h2>
+      <div class="row">
+        <div><label>Max usos</label><input id="maxUses" type="number" value="50"></div>
+        <div><label>Label</label><input id="ticketLabel" value="entrada"></div>
+      </div>
+      <button type="button" class="btn" id="btnTicket">Generar ticket</button>
+      <p class="muted">Flujo actual: el cliente paga por Transfermóvil → tú confirmas → generas ticket y se lo envías.</p>
+      <pre class="mono" id="ticketOut"></pre>
+    </div>
+  </section>
 
-  <p class="muted"><a href="/">Inicio hub</a> · modelo Alset edge-gene-swarm</p>
+  <section id="t-usage" class="hidden">
+    <div class="card">
+      <h2>Panel de uso</h2>
+      <button type="button" class="btn sec" id="btnUsage">Refrescar</button>
+      <div class="stat" id="usageStats" style="margin-top:.7rem"></div>
+      <h2 style="margin-top:1rem">Historial reciente</h2>
+      <pre class="mono" id="usageHist"></pre>
+    </div>
+  </section>
+
+  <section id="t-genes" class="hidden">
+    <div class="card">
+      <h2>Enjambre de genes</h2>
+      <button type="button" class="btn sec" id="btnGenes">Genes de la sala</button>
+      <button type="button" class="btn sec" id="btnLive">Eventos live</button>
+      <pre class="mono" id="genesOut"></pre>
+    </div>
+  </section>
+</div>
 <script>
-const $ = (id) => document.getElementById(id);
-const apiKey = () => $('apiKey').value.trim();
-const headers = (json) => {
-  const h = {};
-  if (json) h['Content-Type'] = 'application/json';
-  if (apiKey()) h['X-API-Key'] = apiKey();
-  return h;
-};
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const key = () => $('apiKey').value.trim();
+  const H = (json) => {
+    const h = {};
+    if (json) h['Content-Type'] = 'application/json';
+    if (key()) h['X-API-Key'] = key();
+    return h;
+  };
+  try { const k = localStorage.getItem('ash_key'); if (k) $('apiKey').value = k; } catch(e){}
+  $('apiKey').addEventListener('change', () => { try { localStorage.setItem('ash_key', key()); } catch(e){} });
 
-$('btnCreateOrg').onclick = async () => {
-  const r = await fetch('/api/saas/orgs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: $('orgName').value, plan: $('orgPlan').value }),
+  document.querySelectorAll('.tabs button').forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll('.tabs button').forEach((x) => x.classList.remove('on'));
+      b.classList.add('on');
+      ['start','pay','events','usage','genes'].forEach((t) => {
+        $('t-' + t).classList.toggle('hidden', t !== b.getAttribute('data-t'));
+      });
+    };
   });
-  const d = await r.json();
-  $('orgOut').textContent = JSON.stringify(d, null, 2);
-  if (d.org && d.org.apiKey) $('apiKey').value = d.org.apiKey;
-};
 
-$('btnMe').onclick = async () => {
-  const r = await fetch('/api/saas/me', { headers: headers() });
-  $('meOut').textContent = JSON.stringify(await r.json(), null, 2);
-};
+  $('btnCreateOrg').onclick = async () => {
+    const r = await fetch('/api/saas/orgs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:$('orgName').value, plan:$('orgPlan').value }) });
+    const d = await r.json();
+    $('orgOut').textContent = JSON.stringify(d, null, 2);
+    if (d.org && d.org.apiKey) { $('apiKey').value = d.org.apiKey; try { localStorage.setItem('ash_key', d.org.apiKey); } catch(e){} }
+  };
 
-$('btnBoot').onclick = async () => {
-  const id = $('matchId').value.trim() || 'partido-demo';
-  const r = await fetch('/api/room/' + encodeURIComponent(id) + '/bootstrap', {
-    method: 'POST',
-    headers: headers(true),
-    body: JSON.stringify({ title: $('matchTitle').value, status: 'open' }),
-  });
-  const d = await r.json();
-  $('bootOut').textContent = JSON.stringify(d, null, 2);
-  const base = location.origin;
-  $('links').innerHTML =
-    '<a href="/publish.html?match=' + id + '&label=Cam1" target="_blank">Transmitir</a>' +
-    '<a href="/watch.html?match=' + id + '" target="_blank">Ver</a>' +
-    '<a href="/director.html?match=' + id + '" target="_blank">Director</a>' +
-    '<a href="/program.html?match=' + id + '" target="_blank">Programa OBS</a>';
-};
+  async function loadMe() {
+    const r = await fetch('/api/saas/me', { headers: H() });
+    const d = await r.json();
+    $('meOut').textContent = JSON.stringify(d, null, 2);
+    if (d.payments) fillPay(d.payments);
+    if (d.usage) renderUsage(d.usage, d.limits);
+    return d;
+  }
+  $('btnMe').onclick = loadMe;
 
-$('btnEnd').onclick = async () => {
-  const id = $('matchId').value.trim();
-  const r = await fetch('/api/room/' + encodeURIComponent(id) + '/end', { method: 'POST', headers: headers() });
-  $('bootOut').textContent = JSON.stringify(await r.json(), null, 2);
-};
+  function fillPay(p) {
+    $('payProvider').value = p.activeProvider || 'transfermovil';
+    const tm = p.transfermovil || {};
+    $('tmHolder').value = tm.holderName || '';
+    $('tmPhone').value = tm.phone || '';
+    $('tmLast4').value = tm.cardLast4 || '';
+    $('tmBank').value = tm.cardBank || '';
+    $('tmCur').value = tm.currency || 'CUP';
+    $('tmAmount').value = tm.amountHint || '';
+    $('tmHint').value = tm.accountHint || '';
+    if (tm.instructions) $('tmInstr').value = tm.instructions;
+  }
 
-$('btnTicket').onclick = async () => {
-  const id = $('matchId').value.trim();
-  const r = await fetch('/api/admin/ticket', {
-    method: 'POST',
-    headers: headers(true),
-    body: JSON.stringify({ matchId: id, maxUses: +$('maxUses').value || 50, label: $('ticketLabel').value }),
-  });
-  $('ticketOut').textContent = JSON.stringify(await r.json(), null, 2);
-};
+  $('btnSavePay').onclick = async () => {
+    const body = {
+      activeProvider: $('payProvider').value,
+      transfermovil: {
+        holderName: $('tmHolder').value,
+        phone: $('tmPhone').value,
+        cardLast4: $('tmLast4').value,
+        cardBank: $('tmBank').value,
+        currency: $('tmCur').value,
+        amountHint: $('tmAmount').value,
+        accountHint: $('tmHint').value,
+        instructions: $('tmInstr').value,
+        enabled: true,
+      },
+      stripe: { enabled: false, publishableKey: $('stKey').value, priceId: $('stPrice').value },
+      paypal: { enabled: !!$('ppLink').value, meLink: $('ppLink').value },
+      payoneer: { enabled: !!$('poEmail').value, email: $('poEmail').value },
+    };
+    const r = await fetch('/api/saas/payments', { method:'POST', headers: H(true), body: JSON.stringify(body) });
+    $('payOut').textContent = JSON.stringify(await r.json(), null, 2);
+  };
 
-$('btnGenes').onclick = async () => {
-  const id = $('matchId').value.trim();
-  const r = await fetch('/api/room/' + encodeURIComponent(id) + '/genes');
-  $('genesOut').textContent = JSON.stringify(await r.json(), null, 2);
-};
+  $('btnBoot').onclick = async () => {
+    const id = $('matchId').value.trim();
+    const r = await fetch('/api/room/' + encodeURIComponent(id) + '/bootstrap', {
+      method:'POST', headers: H(true), body: JSON.stringify({ title: $('matchTitle').value, status: 'open' }),
+    });
+    const d = await r.json();
+    $('bootOut').textContent = JSON.stringify(d, null, 2);
+    $('links').innerHTML =
+      '<a target="_blank" href="/publish.html?match=' + id + '&label=Cam1">Transmitir</a> · ' +
+      '<a target="_blank" href="/watch.html?match=' + id + '">Ver</a> · ' +
+      '<a target="_blank" href="/director.html?match=' + id + '">Director</a> · ' +
+      '<a target="_blank" href="/program.html?match=' + id + '">OBS</a>';
+    $('payLink').innerHTML = 'Página de pago para clientes: <a target="_blank" href="/pay.html?match=' + id + '">/pay.html?match=' + id + '</a>';
+  };
 
-$('btnLive').onclick = async () => {
-  const r = await fetch('/api/saas/live');
-  $('genesOut').textContent = JSON.stringify(await r.json(), null, 2);
-};
+  $('btnEnd').onclick = async () => {
+    const id = $('matchId').value.trim();
+    const r = await fetch('/api/room/' + encodeURIComponent(id) + '/end', { method:'POST', headers: H() });
+    $('bootOut').textContent = JSON.stringify(await r.json(), null, 2);
+  };
+
+  $('btnTicket').onclick = async () => {
+    const id = $('matchId').value.trim();
+    const r = await fetch('/api/admin/ticket', {
+      method:'POST', headers: H(true),
+      body: JSON.stringify({ matchId: id, maxUses: +$('maxUses').value || 50, label: $('ticketLabel').value }),
+    });
+    $('ticketOut').textContent = JSON.stringify(await r.json(), null, 2);
+  };
+
+  function renderUsage(u, limits) {
+    u = u || {};
+    $('usageStats').innerHTML = [
+      ['Eventos creados', u.eventsCreated||0],
+      ['Eventos cerrados', u.eventsEnded||0],
+      ['Tickets', u.ticketsIssued||0],
+      ['Pico viewers', u.peakViewers||0],
+      ['Pico cámaras', u.peakPublishers||0],
+      ['Genes spawn', u.geneSpawns||0],
+      ['Genes destroy', u.geneDestroys||0],
+    ].map(([k,v]) => '<div><b>'+v+'</b><span class="muted">'+k+'</span></div>').join('');
+    $('usageHist').textContent = JSON.stringify({ limits, history: u.history||[] }, null, 2);
+  }
+  $('btnUsage').onclick = async () => {
+    const r = await fetch('/api/saas/usage', { headers: H() });
+    const d = await r.json();
+    renderUsage(d.usage, d.limits);
+  };
+
+  $('btnGenes').onclick = async () => {
+    const id = $('matchId').value.trim();
+    $('genesOut').textContent = JSON.stringify(await (await fetch('/api/room/' + encodeURIComponent(id) + '/genes')).json(), null, 2);
+  };
+  $('btnLive').onclick = async () => {
+    $('genesOut').textContent = JSON.stringify(await (await fetch('/api/saas/live')).json(), null, 2);
+  };
+
+  if (key()) loadMe();
+})();
 </script>
 </body>
 </html>

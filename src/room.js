@@ -137,6 +137,8 @@ export class MatchRoom {
       const genes = await this.getGenes();
       const geneCount = Object.values(genes).filter((g) => g.status === "live").length;
       if (live) {
+        const snapViewers = [...this.sessions.values()].filter((s) => s.role === "viewer" || s.role === "director").length;
+        const snapPubs = [...this.sessions.values()].filter((s) => s.role === "publisher").length;
         await stub.fetch(
           new Request("https://saas/internal/live", {
             method: "POST",
@@ -147,6 +149,8 @@ export class MatchRoom {
               title: meta.title,
               geneCount,
               status: meta.status,
+              peakViewers: snapViewers,
+              peakPublishers: snapPubs,
             }),
           })
         );
@@ -212,12 +216,28 @@ export class MatchRoom {
           const genes = await this.getGenes();
           genes[g.id] = g;
           await this.putGenes(genes);
+          meta._usageBootstrapped = true;
         }
         if (body.status) meta.status = body.status;
         if (meta.status === "open" || meta.status === "live") {
           /* keep */
         }
         await this.state.storage.put("meta", meta);
+        if (meta._usageBootstrapped && meta.orgId && this.env.SAAS) {
+          try {
+            const id = this.env.SAAS.idFromName("global");
+            const stub = this.env.SAAS.get(id);
+            await stub.fetch(
+              new Request("https://saas/internal/usage", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ orgId: meta.orgId, eventsCreated: 1, geneSpawns: 1 }),
+              })
+            );
+          } catch (_) {}
+          delete meta._usageBootstrapped;
+          await this.state.storage.put("meta", meta);
+        }
         await this.notifyRegistry(meta.status !== "ended");
         return Response.json({ ok: true, meta, snapshot: await this.snapshot() });
       }
@@ -299,6 +319,19 @@ export class MatchRoom {
           label: body.label || "entrada",
         };
         await this.putTickets(tickets);
+        if (meta.orgId && this.env.SAAS) {
+          try {
+            const id = this.env.SAAS.idFromName("global");
+            const stub = this.env.SAAS.get(id);
+            await stub.fetch(
+              new Request("https://saas/internal/usage", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ orgId: meta.orgId, ticketsIssued: 1 }),
+              })
+            );
+          } catch (_) {}
+        }
         return Response.json({ ok: true, ticket: tickets[code], plan: lim.id });
       }
 
