@@ -482,7 +482,7 @@ export class MatchRoom {
       const info = this.sessions.get(server);
       if (!info) return;
 
-      if (msg.type === "sfu_bind" && info.role === "publisher") {
+      if ((msg.type === "sfu_bind" || msg.type === "sfu_publish") && info.role === "publisher") {
         const producers = await this.getProducers();
         if (producers[info.id]) {
           producers[info.id].sfuSessionId = msg.sessionId || null;

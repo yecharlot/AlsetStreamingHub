@@ -72,15 +72,21 @@
       video.srcObject = stream;
       await video.play().catch(function(){});
       document.getElementById("hudAngle").textContent = (labelInput.value||"Camara").trim();
-      setStatus("Publicando señal…");
+      setStatus("Publicando señal (SFU)…");
+      // WS en paralelo para no bloquear presencia en la sala
+      connectWs();
       pub = await H.sfuPublish(stream, myId);
+      if (ws && ws.readyState === 1) {
+        var bind = { type:"sfu_bind", sessionId:pub.sessionId, tracks:pub.tracks };
+        ws.send(JSON.stringify(bind));
+        ws.send(JSON.stringify({ type:"sfu_publish", sessionId:pub.sessionId, tracks:pub.tracks }));
+      }
       setStatus("En transmisión · no cierres esta pestaña", "on");
       badge.classList.add("on");
       hudNet.textContent = "SFU conectado";
       meter.style.width = "85%";
       document.getElementById("btnStop").disabled = false;
       document.getElementById("btnStart").disabled = true;
-      connectWs();
     } catch(e) {
       setStatus("No se pudo iniciar", "err");
       hudNet.textContent = "Error";
@@ -106,7 +112,10 @@
     ws = new WebSocket(H.wsUrl(matchId,{ role:"publisher", id:myId, label:label }));
     mesh = H.meshPublisherAttach(stream, ws, myId);
     ws.onopen = function(){
-      ws.send(JSON.stringify({ type:"sfu_publish", sessionId:pub.sessionId, tracks:pub.tracks }));
+      if (pub && pub.sessionId) {
+        ws.send(JSON.stringify({ type:"sfu_bind", sessionId:pub.sessionId, tracks:pub.tracks }));
+        ws.send(JSON.stringify({ type:"sfu_publish", sessionId:pub.sessionId, tracks:pub.tracks }));
+      }
     };
     ws.onmessage = function(ev){
       var msg = JSON.parse(ev.data);

@@ -113,7 +113,7 @@
       throw new Error("SFU no devolvió answer al publicar. " + JSON.stringify(push).slice(0, 200));
     }
 
-    const iceWait = waitIceConnected(pc, 8000).catch(() => {});
+    const iceWait = waitIceConnected(pc, 5000).catch(() => {});
     await pc.setRemoteDescription(new RTCSessionDescription(sd));
     await iceWait;
 
@@ -299,3 +299,4 @@
   };
 })(window);
 /* 1789946034 */
+/* ash-v-sfu-bind-fix */

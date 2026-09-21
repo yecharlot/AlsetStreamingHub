@@ -19,7 +19,7 @@ export const PLANS = {
     maxPublishers: 2,
     maxViewers: 25,
     maxTicketsPerEvent: 50,
-    sfu: false,
+    sfu: true,
     priceHint: "0",
   },
   pro: {
