@@ -34,7 +34,7 @@
       <div class="logo">RX</div>
       <div>
         <h1 id="title">Ver en vivo</h1>
-        <p id="sub">Cámaras del evento · toca para ver en grande</p>
+        <p id="sub">Evento <b id="matchShow">—</b> · previews de quien transmite</p>
       </div>
     </div>
     <a class="btn ghost" href="/" style="min-height:36px;padding:0.4rem 0.85rem;font-size:0.78rem">Inicio</a>
@@ -67,6 +67,8 @@
 (function () {
   var H = window.AlsetHub;
   var matchId = H.qs("match", "evento-demo");
+  var matchShowEl = document.getElementById("matchShow");
+  if (matchShowEl) matchShowEl.textContent = matchId;
   var ticket = H.qs("ticket", "");
   var myId = "view-" + Math.random().toString(36).slice(2, 8);
   var st = document.getElementById("st");
@@ -297,6 +299,25 @@
       if (userClick) log(String(e.message || e));
     }
   }
+
+  
+  // Respaldo: si el WS pierde un join, el estado HTTP refresca la lista
+  async function refreshFromHttp() {
+    try {
+      var r = await fetch("/api/room/" + encodeURIComponent(matchId) + "/state");
+      var msg = await r.json();
+      if (msg && msg.producers) {
+        producers = msg.producers;
+        renderCams();
+        if (!activeId) {
+          var b = bestProducer();
+          if (b) selectProducer(b.id, false);
+        }
+      }
+    } catch (e) {}
+  }
+  setInterval(refreshFromHttp, 4000);
+  setTimeout(refreshFromHttp, 800);
 
   ws = new WebSocket(H.wsUrl(matchId, { role: "viewer", id: myId, ticket: ticket }));
   ws.onopen = function () {

@@ -18,7 +18,7 @@ export class MatchRoom {
     if (!meta) {
       meta = {
         id: "default",
-        title: "Partido en vivo",
+        title: "Evento en vivo",
         createdAt: Date.now(),
         status: "open", // open | live | ended
       };
@@ -65,14 +65,30 @@ export class MatchRoom {
 
   async snapshot() {
     const meta = await this.ensureMeta();
-    const producers = await this.getProducers();
-    const list = Object.values(producers).filter((p) => p.online);
+    const stored = await this.getProducers();
+    // Solo cámaras con WebSocket de publisher ACTIVO (evita fantasmas en storage)
+    const livePubs = [...this.sessions.values()].filter((s) => s.role === "publisher");
+    const list = livePubs.map((s) => {
+      const prev = stored[s.id] || {};
+      return {
+        id: s.id,
+        label: s.label || prev.label || s.id,
+        online: true,
+        quality: prev.quality != null ? prev.quality : 0.7,
+        bitrate: prev.bitrate || 0,
+        fps: prev.fps || 0,
+        updatedAt: prev.updatedAt || Date.now(),
+        sfuSessionId: prev.sfuSessionId || null,
+        tracks: prev.tracks || [],
+      };
+    });
     return {
       type: "room_state",
       meta,
       producers: list,
       viewers: [...this.sessions.values()].filter((s) => s.role === "viewer" || s.role === "director").length,
-      publishers: [...this.sessions.values()].filter((s) => s.role === "publisher").length,
+      publishers: livePubs.length,
+      matchHint: "Usa el mismo nombre de evento en Transmitir y en Ver",
     };
   }
 

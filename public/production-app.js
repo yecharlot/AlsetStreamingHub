@@ -31,7 +31,7 @@ await new Promise((resolve, reject) => {
 
 const H = window.AlsetHub;
 const params = new URLSearchParams(location.search);
-const matchId = params.get("match") || "partido-demo";
+const matchId = params.get("match") || "evento-demo";
 const ticket = params.get("ticket") || "";
 const myId = "dir-" + Math.random().toString(36).slice(2, 8);
 

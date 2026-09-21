@@ -14,7 +14,7 @@
       <div class="logo">TX</div>
       <div>
         <h1>Transmitir</h1>
-        <p>Este teléfono es la cámara</p>
+        <p>Este teléfono es la cámara · evento <b id="matchShow">—</b></p>
       </div>
     </div>
     <a class="btn ghost" href="/" style="min-height:36px;padding:0.4rem 0.85rem;font-size:0.78rem">Inicio</a>
@@ -43,6 +43,7 @@
 (function () {
   var H = window.AlsetHub;
   var matchId = H.qs("match", "evento-demo");
+  document.getElementById("matchShow").textContent = matchId;
   var labelInput = document.getElementById("camLabel");
   labelInput.value = H.qs("label", "") || "Camara";
   var myId = "pub-" + Math.random().toString(36).slice(2, 8);
