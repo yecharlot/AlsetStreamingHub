@@ -7,11 +7,6 @@
 <meta name="theme-color" content="#06060b"/>
 <title>TX · Alset Live</title>
 <link rel="stylesheet" href="/styles.css"/>
-<style>
-  .zoom-bar{display:flex;align-items:center;gap:.5rem;margin-top:.65rem}
-  .zoom-bar input[type=range]{flex:1}
-  .stage video{transform-origin:center center}
-</style>
 </head>
 <body>
 <div class="shell">
@@ -38,15 +33,8 @@
   <div class="card" style="margin-top:0.8rem">
     <h2>Configuración de cámara</h2>
     <label>Ángulo / nombre</label>
-    <input id="camLabel" placeholder="Home · Entrenamiento · Tribuna…"/>
+    <input id="camLabel" placeholder="Home plate · Left field · Tribuna…"/>
     <div class="meter" title="Señal"><i id="meter"></i></div>
-    <div class="zoom-bar">
-      <button class="btn ghost sm" type="button" id="btnZoomOut">−</button>
-      <input type="range" id="zoomRange" min="1" max="5" step="0.1" value="1"/>
-      <button class="btn ghost sm" type="button" id="btnZoomIn">+</button>
-      <span id="zoomLabel" class="sub">1.0×</span>
-    </div>
-    <p class="sub" style="margin-top:.35rem">Zoom óptico si el teléfono lo permite; si no, zoom digital.</p>
     <div class="row">
       <button class="btn primary" id="btnStart" type="button" style="flex:1.4">Iniciar transmisión</button>
       <button class="btn" id="btnStop" type="button" disabled>Detener</button>
@@ -72,32 +60,10 @@
   var meter = document.getElementById("meter");
   var hudNet = document.getElementById("hudNet");
   var video = document.getElementById("local");
-  var zoomRange = document.getElementById("zoomRange");
-  var zoomLabel = document.getElementById("zoomLabel");
-  var stream, ws, pub, mesh, videoTrack=null, zoomCap=null;
+  var stream, ws, pub, mesh;
 
   function setStatus(t, cls){ st.textContent=t; st.className="status"+(cls?" "+cls:""); }
   function log(m){ logEl.style.display="block"; logEl.textContent=typeof m==="string"?m:JSON.stringify(m,null,2); }
-
-  function applyZoom(z){
-    z = Math.max(1, Math.min(5, Number(z)||1));
-    zoomRange.value = z;
-    zoomLabel.textContent = z.toFixed(1) + "×";
-    if (videoTrack && zoomCap) {
-      var val = Math.min(zoomCap.max, Math.max(zoomCap.min, z * (zoomCap.min || 1)));
-      // map 1..5 UI to device range
-      var t = (z - 1) / 4;
-      val = zoomCap.min + t * (zoomCap.max - zoomCap.min);
-      videoTrack.applyConstraints({ advanced: [{ zoom: val }] }).catch(function(){
-        video.style.transform = "scale(" + z + ")";
-      });
-    } else {
-      video.style.transform = "scale(" + z + ")";
-    }
-  }
-  zoomRange.oninput = function(){ applyZoom(zoomRange.value); };
-  document.getElementById("btnZoomIn").onclick = function(){ applyZoom(Number(zoomRange.value)+0.2); };
-  document.getElementById("btnZoomOut").onclick = function(){ applyZoom(Number(zoomRange.value)-0.2); };
 
   document.getElementById("btnStart").onclick = async function(){
     try {
@@ -105,44 +71,22 @@
       stream = await H.getCam();
       video.srcObject = stream;
       await video.play().catch(function(){});
-      videoTrack = stream.getVideoTracks()[0] || null;
-      zoomCap = null;
-      if (videoTrack && videoTrack.getCapabilities) {
-        var cap = videoTrack.getCapabilities();
-        if (cap.zoom) {
-          zoomCap = cap.zoom;
-          zoomRange.min = 1;
-          zoomRange.max = 5;
-        }
-      }
       document.getElementById("hudAngle").textContent = (labelInput.value||"Camara").trim();
-      setStatus("Conectando sala…");
-      connectWs();
-      setStatus("Publicando señal (SFU)…");
-      pub = await H.sfuPublish(stream);
-      sendSfuBind();
-      // Reenviar bind por si el viewer entró antes
-      setTimeout(sendSfuBind, 800);
-      setTimeout(sendSfuBind, 2500);
+      setStatus("Publicando señal…");
+      pub = await H.sfuPublish(stream, myId);
       setStatus("En transmisión · no cierres esta pestaña", "on");
       badge.classList.add("on");
       hudNet.textContent = "SFU conectado";
       meter.style.width = "85%";
       document.getElementById("btnStop").disabled = false;
       document.getElementById("btnStart").disabled = true;
+      connectWs();
     } catch(e) {
       setStatus("No se pudo iniciar", "err");
       hudNet.textContent = "Error";
       log(String(e.message||e));
     }
   };
-
-  function sendSfuBind(){
-    if (!ws || ws.readyState !== 1 || !pub || !pub.sessionId) return;
-    var payload = { type:"sfu_publish", sessionId:pub.sessionId, tracks:pub.tracks };
-    ws.send(JSON.stringify(payload));
-    ws.send(JSON.stringify({ type:"sfu_bind", sessionId:pub.sessionId, tracks:pub.tracks }));
-  }
 
   document.getElementById("btnStop").onclick = function(){
     try{ stream&&stream.getTracks().forEach(function(t){t.stop();}); }catch(_){}
@@ -151,7 +95,6 @@
     try{ ws&&ws.close(); }catch(_){}
     badge.classList.remove("on");
     meter.style.width = "0%";
-    video.style.transform = "";
     document.getElementById("btnStart").disabled = false;
     document.getElementById("btnStop").disabled = true;
     setStatus("Transmisión detenida");
@@ -160,10 +103,11 @@
 
   function connectWs(){
     var label = (labelInput.value||"Camara").trim();
-    if (ws && ws.readyState <= 1) return;
     ws = new WebSocket(H.wsUrl(matchId,{ role:"publisher", id:myId, label:label }));
     mesh = H.meshPublisherAttach(stream, ws, myId);
-    ws.onopen = function(){ sendSfuBind(); };
+    ws.onopen = function(){
+      ws.send(JSON.stringify({ type:"sfu_publish", sessionId:pub.sessionId, tracks:pub.tracks }));
+    };
     ws.onmessage = function(ev){
       var msg = JSON.parse(ev.data);
       if(msg.type==="signal"&&msg.data&&mesh) mesh.handleSignal(msg.from, msg.data);
