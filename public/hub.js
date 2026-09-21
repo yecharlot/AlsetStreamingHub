@@ -223,7 +223,7 @@
         };
       }
       if (data.offer) {
-        await pc.setRemoteDescription(data.offer);
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         ws.send(JSON.stringify({ type: "signal", to: from, data: { answer } }));
@@ -266,7 +266,7 @@
       stream: remoteStream,
       mode: "mesh",
       async handleSignal(data) {
-        if (data.answer) await pc.setRemoteDescription(data.answer);
+        if (data.answer) await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
         else if (data.candidate) {
           try {
             await pc.addIceCandidate(data.candidate);
