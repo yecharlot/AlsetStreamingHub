@@ -484,12 +484,20 @@ export class MatchRoom {
 
       if ((msg.type === "sfu_bind" || msg.type === "sfu_publish") && info.role === "publisher") {
         const producers = await this.getProducers();
-        if (producers[info.id]) {
-          producers[info.id].sfuSessionId = msg.sessionId || null;
-          producers[info.id].tracks = msg.tracks || [];
-          producers[info.id].updatedAt = Date.now();
-          await this.putProducers(producers);
+        if (!producers[info.id]) {
+          producers[info.id] = {
+            id: info.id,
+            label: info.label || info.id,
+            online: true,
+            quality: 0.7,
+            geneId: info.geneId || null,
+          };
         }
+        producers[info.id].sfuSessionId = msg.sessionId || null;
+        producers[info.id].tracks = msg.tracks || [];
+        producers[info.id].online = true;
+        producers[info.id].updatedAt = Date.now();
+        await this.putProducers(producers);
         const genes = await this.getGenes();
         if (info.geneId && genes[info.geneId]) {
           genes[info.geneId].sfuSessionId = msg.sessionId || null;
@@ -497,7 +505,15 @@ export class MatchRoom {
           genes[info.geneId].updatedAt = Date.now();
           await this.putGenes(genes);
         }
-        this.broadcast({ type: "producer_sfu", id: info.id, sessionId: msg.sessionId });
+        // Como en la versión estable: producer_join con SFU completo (el viewer reengancha)
+        this.broadcast({ type: "producer_join", producer: producers[info.id] });
+        this.broadcast({
+          type: "producer_sfu",
+          id: info.id,
+          sessionId: msg.sessionId,
+          tracks: msg.tracks || [],
+          producer: producers[info.id],
+        });
         return;
       }
 

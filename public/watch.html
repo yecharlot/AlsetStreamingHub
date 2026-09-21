@@ -6,6 +6,21 @@
 <meta name="theme-color" content="#06060b"/>
 <title>RX · Alset Live</title>
 <link rel="stylesheet" href="/styles.css"/>
+<style>
+  #stage.mosaic-mode #remote{display:none}
+  #mosaic{display:none;width:100%;height:100%;position:absolute;inset:0;gap:4px;padding:4px;box-sizing:border-box}
+  #stage.mosaic-mode #mosaic{display:grid}
+  #mosaic.cols-1{grid-template-columns:1fr}
+  #mosaic.cols-2{grid-template-columns:1fr 1fr}
+  #mosaic.cols-3,#mosaic.cols-4{grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
+  #mosaic .cell{position:relative;background:#000;border-radius:8px;overflow:hidden;min-height:0}
+  #mosaic .cell video{width:100%;height:100%;object-fit:cover}
+  #mosaic .cell .tag{position:absolute;left:6px;bottom:6px;background:rgba(0,0,0,.65);color:#fff;font-size:.7rem;padding:2px 6px;border-radius:6px}
+  .cam-actions{display:flex;gap:.35rem;margin-top:.35rem;flex-wrap:wrap}
+  .cam-actions button{font-size:.7rem;padding:.25rem .45rem}
+  .cam.on-mosaic{outline:2px solid #3d8bfd}
+  .layout-bar{display:flex;gap:.4rem;flex-wrap:wrap;margin:.5rem 0}
+</style>
 </head>
 <body>
 <div class="shell">
@@ -20,8 +35,9 @@
     <a class="btn ghost sm" href="/">Inicio</a>
   </header>
 
-  <div class="stage">
+  <div class="stage" id="stage">
     <video id="remote" playsinline autoplay controls muted></video>
+    <div id="mosaic" class="cols-2"></div>
     <div class="live-badge" id="liveBadge"><i></i> EN VIVO</div>
     <div class="stage-hud">
       <span id="hudCam">Sin cámara</span>
@@ -35,6 +51,14 @@
     <button class="btn ghost sm" type="button" id="btnSound">Sonido</button>
   </div>
 
+  <div class="layout-bar card" style="padding:.65rem">
+    <strong style="font-size:.85rem">Pantalla</strong>
+    <button class="btn ghost sm" type="button" data-layout="1">1 cámara</button>
+    <button class="btn ghost sm" type="button" data-layout="2">2 cámaras</button>
+    <button class="btn ghost sm" type="button" data-layout="4">Hasta 4</button>
+    <span class="sub" id="mosaicHint">Toca «+ mosaico» en cada señal para combinar home + entrenamiento, etc.</span>
+  </div>
+
   <div class="card">
     <h2>Señales en el evento</h2>
     <div class="cams" id="cams"></div>
@@ -42,7 +66,7 @@
   </div>
 
   <pre class="out" id="log" style="display:none"></pre>
-  <p class="foot">Solo aparecen dispositivos que están transmitiendo ahora. Toca un preview para el programa.</p>
+  <p class="foot">Varias cámaras pueden verse a la vez. El programa principal se elige con «Ver».</p>
 </div>
 <script src="/hub.js"></script>
 <script>
@@ -60,120 +84,148 @@
   var camsEl = document.getElementById("cams");
   var emptyEl = document.getElementById("empty");
   var video = document.getElementById("remote");
+  var stage = document.getElementById("stage");
+  var mosaicEl = document.getElementById("mosaic");
   var badge = document.getElementById("liveBadge");
   var hudCam = document.getElementById("hudCam");
   var hudCount = document.getElementById("hudCount");
   var producers = [], activeId = null, programSession = null, previewSessions = {}, ws;
+  var mosaicIds = []; // up to 4 producer ids for simultaneous view
+  var layoutMax = 4;
   var MAX_PREVIEWS = 8;
 
   function setStatus(t,cls){ st.textContent=t; st.className="status"+(cls?" "+cls:""); }
   function log(m){ logEl.style.display="block"; logEl.textContent=typeof m==="string"?m:JSON.stringify(m,null,2); }
-  function bestProducer(){
-    return producers.filter(function(p){return p.online;}).sort(function(a,b){return (b.quality||0)-(a.quality||0);})[0];
-  }
-  function onlineList(){ return producers.filter(function(p){return p.online;}); }
 
-  document.getElementById("btnSound").onclick = function(){ video.muted=false; video.play().catch(function(){}); };
-  document.getElementById("btnBest").onclick = function(){ var b=bestProducer(); if(b) selectProducer(b.id,true); };
+  function bestProducer(){
+    var list = producers.filter(function(p){return p.online;});
+    if(!list.length) return null;
+    list.sort(function(a,b){return (b.quality||0)-(a.quality||0);});
+    return list[0];
+  }
 
   function renderCams(){
-    var online = onlineList();
-    var best = bestProducer();
-    hudCount.textContent = online.length + (online.length===1?" señal":" señales");
-    emptyEl.style.display = online.length ? "none" : "block";
-    emptyEl.textContent = "Nadie transmite en «"+matchId+"». Abre Transmitir en un móvil con el mismo evento.";
-
-    camsEl.innerHTML = online.map(function(p){
-      var q=(p.quality||0)>=0.7?"q":(p.quality||0)>=0.4?"q mid":"q low";
-      var act=p.id===activeId?"active":"";
-      var bestCls=best&&best.id===p.id?"best":"";
-      return '<div class="cam '+act+' '+bestCls+'" data-id="'+p.id+'">'+
-        '<video muted playsinline autoplay data-vid="'+p.id+'"></video>'+
-        '<div class="meta"><strong>'+(p.label||p.id)+'</strong><span class="tag-live">LIVE</span></div>'+
-        '<div class="'+q+'">'+Math.round((p.quality||0)*100)+'% · '+(p.sfuSessionId?"SFU":"directo")+
-        (best&&best.id===p.id?" · recomendada":"")+"</div></div>";
-    }).join("");
-
-    Array.prototype.forEach.call(camsEl.querySelectorAll(".cam"), function(el){
-      el.onclick = function(){ selectProducer(el.getAttribute("data-id"), true); };
+    var live = producers.filter(function(p){return p.online;});
+    hudCount.textContent = live.length+" señales";
+    emptyEl.style.display = live.length ? "none" : "block";
+    camsEl.innerHTML = live.map(function(p){
+      var inM = mosaicIds.indexOf(p.id)>=0;
+      return '<div class="cam'+(p.id===activeId?' active':'')+(inM?' on-mosaic':'')+'" data-id="'+p.id+'">'+
+        '<video playsinline muted autoplay data-prev="'+p.id+'"></video>'+
+        '<div class="cam-meta"><strong>'+(p.label||p.id)+'</strong>'+
+        '<div class="'+(p.quality>0.7?'ok':'')+'">'+Math.round((p.quality||0)*100)+'% · '+(p.sfuSessionId?'SFU':'mesh')+'</div>'+
+        '<div class="cam-actions">'+
+        '<button type="button" class="btn ghost sm btn-view" data-id="'+p.id+'">Ver</button>'+
+        '<button type="button" class="btn ghost sm btn-mos" data-id="'+p.id+'">'+(inM?'Quitar':' + mosaico')+'</button>'+
+        '</div></div></div>';
+    }).join('');
+    live.forEach(function(p){ ensurePreview(p); });
+    // attach video elements
+    camsEl.querySelectorAll('video[data-prev]').forEach(function(el){
+      var id=el.getAttribute('data-prev');
+      if(previewSessions[id]&&previewSessions[id].stream) el.srcObject=previewSessions[id].stream;
     });
-    online.slice(0, MAX_PREVIEWS).forEach(function(p){ ensurePreview(p); });
+    camsEl.querySelectorAll('.btn-view').forEach(function(b){
+      b.onclick=function(e){ e.stopPropagation(); selectProducer(b.getAttribute('data-id'), true); };
+    });
+    camsEl.querySelectorAll('.btn-mos').forEach(function(b){
+      b.onclick=function(e){ e.stopPropagation(); toggleMosaic(b.getAttribute('data-id')); };
+    });
     Object.keys(previewSessions).forEach(function(id){
-      if(!online.find(function(p){return p.id===id;})){
+      if(!live.find(function(p){return p.id===id;})){
         try{ previewSessions[id].close(); }catch(_){}
         delete previewSessions[id];
       }
     });
+    renderMosaic();
   }
 
-  async function ensurePreview(p){
-    var videoEl = camsEl.querySelector('video[data-vid="'+p.id+'"]');
-    if(!videoEl) return;
-    if(previewSessions[p.id] && previewSessions[p.id].stream){
-      videoEl.srcObject = previewSessions[p.id].stream;
-      videoEl.play().catch(function(){});
-      return;
+  async function ensurePreview(p, force){
+    if(!p||!p.online) return;
+    if(previewSessions[p.id] && !force){
+      // upgrade mesh → SFU when session arrives
+      if(p.sfuSessionId && previewSessions[p.id].mode==='mesh'){
+        force = true;
+      } else {
+        if(previewSessions[p.id].stream){
+          var el=camsEl.querySelector('video[data-prev="'+p.id+'"]');
+          if(el) el.srcObject=previewSessions[p.id].stream;
+        }
+        return;
+      }
     }
-    if(previewSessions[p.id]) return;
-    var closed=false;
-    var handle={ stream:null, close:function(){ closed=true; } };
+    if(force && previewSessions[p.id]){
+      try{ previewSessions[p.id].close(); }catch(_){}
+      delete previewSessions[p.id];
+    }
+    if(Object.keys(previewSessions).length >= MAX_PREVIEWS && !previewSessions[p.id]) return;
+    var handle={ mode:'pending', stream:null, close:function(){} };
     previewSessions[p.id]=handle;
     try{
       if(p.sfuSessionId && p.tracks && p.tracks.length){
         var pull = await H.sfuPull(p.sfuSessionId, p.tracks);
-        if(closed){ pull.pc.close(); return; }
-        handle.stream = pull.stream;
-        handle.close = function(){ closed=true; try{ pull.pc.close(); }catch(_){ } };
-        var el = camsEl.querySelector('video[data-vid="'+p.id+'"]');
+        if(!previewSessions[p.id]){ try{pull.close();}catch(_){} return; }
+        handle.mode='sfu'; handle.stream=pull.stream; handle.close=function(){ try{pull.close();}catch(_){} };
+        var el=camsEl.querySelector('video[data-prev="'+p.id+'"]');
         if(el){ el.srcObject=pull.stream; el.play().catch(function(){}); }
+        if(mosaicIds.indexOf(p.id)>=0) renderMosaic();
         return;
       }
       if(!ws||ws.readyState!==1){ delete previewSessions[p.id]; return; }
       var mesh = await H.meshPull(ws, p.id, function(stream){
         handle.stream=stream;
-        var el2=camsEl.querySelector('video[data-vid="'+p.id+'"]');
-        if(el2){ el2.srcObject=stream; el2.play().catch(function(){}); }
+        var el=camsEl.querySelector('video[data-prev="'+p.id+'"]');
+        if(el){ el.srcObject=stream; el.play().catch(function(){}); }
+        if(mosaicIds.indexOf(p.id)>=0) renderMosaic();
       });
-      handle.mesh=mesh;
-      handle.close=function(){ closed=true; try{ mesh.close(); }catch(_){ } };
+      handle.mode='mesh'; handle.mesh=mesh;
+      handle.close=function(){ try{ mesh.close(); }catch(_){} };
     }catch(e){ console.warn(e); delete previewSessions[p.id]; }
   }
 
   async function selectProducer(id, userClick){
-    if(!id||!ws) return;
-    activeId=id;
-    var p=producers.filter(function(x){return x.id===id;})[0];
+    var p = producers.find(function(x){return x.id===id;});
     if(!p||!p.online) return;
-    renderCams();
-    hudCam.textContent = p.label||id;
+    // single program mode
+    stage.classList.remove('mosaic-mode');
+    activeId = id;
+    hudCam.textContent = p.label || id;
     if(programSession&&programSession.close) try{ programSession.close(); }catch(_){}
     programSession=null;
-    setStatus("Conectando «"+(p.label||id)+"»…");
-    badge.classList.remove("on");
-
+    // reuse preview stream if SFU
     var prev=previewSessions[id];
-    if(prev&&prev.stream){
-      video.srcObject=prev.stream; video.muted=true;
+    if(prev&&prev.stream&&prev.mode==='sfu'){
+      video.srcObject=prev.stream;
+      video.muted=true;
       video.play().catch(function(){});
-      setStatus("Programa · "+(p.label||id), "on");
+      setStatus("Programa · "+(p.label||id)+" (SFU)", "on");
       badge.classList.add("on");
-      programSession={ close:function(){}, handleSignal:prev.mesh?prev.mesh.handleSignal.bind(prev.mesh):null };
+      renderCams();
       return;
     }
     if(p.sfuSessionId&&p.tracks&&p.tracks.length){
       try{
         programSession=await H.sfuPull(p.sfuSessionId,p.tracks);
         video.srcObject=programSession.stream; video.muted=true;
-        await video.play().catch(function(){});
-        setStatus("Programa · "+(p.label||id), "on");
+        video.play().catch(function(){});
+        setStatus("Programa · "+(p.label||id)+" (SFU)", "on");
         badge.classList.add("on");
-        return;
-      }catch(e){ if(userClick) log("SFU: "+(e.message||e)); }
+      }catch(e){
+        setStatus("SFU falló · intentando mesh", "warn");
+        if(userClick) log(String(e.message||e));
+        await meshProgram(p,id,userClick);
+      }
+    } else {
+      await meshProgram(p,id,userClick);
     }
+    renderCams();
+  }
+
+  async function meshProgram(p,id,userClick){
     try{
       programSession=await H.meshPull(ws,id,function(stream){
         video.srcObject=stream; video.muted=true; video.play().catch(function(){});
-        setStatus("Programa · "+(p.label||id), "on");
+        setStatus("Programa · "+(p.label||id)+" (mesh)", "on");
         badge.classList.add("on");
       });
     }catch(e){
@@ -182,6 +234,63 @@
     }
   }
 
+  function toggleMosaic(id){
+    var i = mosaicIds.indexOf(id);
+    if(i>=0) mosaicIds.splice(i,1);
+    else {
+      if(mosaicIds.length >= layoutMax) mosaicIds.shift();
+      mosaicIds.push(id);
+    }
+    renderCams();
+  }
+
+  function renderMosaic(){
+    if(!mosaicIds.length){
+      stage.classList.remove('mosaic-mode');
+      document.getElementById('mosaicHint').textContent = 'Toca «+ mosaico» en cada señal (home, entrenamiento…)';
+      return;
+    }
+    stage.classList.add('mosaic-mode');
+    var n = mosaicIds.length;
+    mosaicEl.className = n<=1?'cols-1':(n===2?'cols-2':'cols-4');
+    mosaicEl.innerHTML = mosaicIds.map(function(id){
+      var p = producers.find(function(x){return x.id===id;})||{label:id};
+      return '<div class="cell" data-mid="'+id+'"><video playsinline muted autoplay></video><span class="tag">'+(p.label||id)+'</span></div>';
+    }).join('');
+    mosaicIds.forEach(function(id){
+      var cell = mosaicEl.querySelector('[data-mid="'+id+'"] video');
+      var sess = previewSessions[id];
+      if(cell && sess && sess.stream){
+        cell.srcObject = sess.stream;
+        cell.play().catch(function(){});
+      } else {
+        var p = producers.find(function(x){return x.id===id;});
+        if(p) ensurePreview(p, false).then(function(){ renderMosaic(); });
+      }
+    });
+    hudCam.textContent = mosaicIds.length + ' cámaras a la vez';
+    setStatus('Mosaico · '+mosaicIds.length+' señales', 'on');
+    badge.classList.add('on');
+  }
+
+  document.querySelectorAll('[data-layout]').forEach(function(b){
+    b.onclick=function(){
+      layoutMax = Number(b.getAttribute('data-layout'))||4;
+      while(mosaicIds.length > layoutMax) mosaicIds.shift();
+      renderMosaic();
+      setStatus('Máximo '+layoutMax+' en mosaico');
+    };
+  });
+
+  document.getElementById('btnBest').onclick=function(){
+    var b=bestProducer(); if(b) selectProducer(b.id,true);
+  };
+  document.getElementById('btnSound').onclick=function(){
+    video.muted=!video.muted;
+    mosaicEl.querySelectorAll('video').forEach(function(v){ v.muted=video.muted; });
+    document.getElementById('btnSound').textContent = video.muted?'Sonido':'Silencio';
+  };
+
   async function refreshFromHttp(){
     try{
       var r=await fetch("/api/room/"+encodeURIComponent(matchId)+"/state");
@@ -189,35 +298,46 @@
       if(msg&&msg.producers){
         producers=msg.producers;
         renderCams();
-        if(!activeId){ var b=bestProducer(); if(b) selectProducer(b.id,false); }
+        if(!activeId && !mosaicIds.length){ var b=bestProducer(); if(b) selectProducer(b.id,false); }
       }
     }catch(e){}
   }
   setInterval(refreshFromHttp, 4000);
-  setTimeout(refreshFromHttp, 600);
+  setTimeout(refreshFromHttp, 500);
 
   ws=new WebSocket(H.wsUrl(matchId,{ role:"viewer", id:myId, ticket:ticket }));
   ws.onopen=function(){ setStatus("Sala · "+matchId); };
   ws.onerror=function(){ setStatus("Sin conexión", "err"); };
   ws.onclose=function(ev){
     setStatus("Desconectado", "err");
-    if(ev.code===4003) log("Ticket requerido o inválido");
+    if(ev.code===4003||ev.code===1008) log("Ticket o límite de plan");
   };
   ws.onmessage=function(ev){
     var msg=JSON.parse(ev.data);
-    if(msg.type==="room_state"||msg.type==="presence"){
-      if(msg.meta&&msg.meta.title&&!titleQ) document.getElementById("title").textContent=msg.meta.title;
-      producers=msg.producers||producers;
+    if(msg.type==="room_state"||msg.type==="presence"||msg.type==="welcome"){
+      var room = msg.room || msg;
+      if(room.meta&&room.meta.title&&!titleQ) document.getElementById("title").textContent=room.meta.title;
+      if(room.producers) producers=room.producers;
+      if(msg.producers) producers=msg.producers;
       renderCams();
-      if(!activeId){ var b=bestProducer(); if(b) selectProducer(b.id,false); }
+      if(!activeId && !mosaicIds.length){ var b=bestProducer(); if(b) selectProducer(b.id,false); }
     }
-    if(msg.type==="producer_join"){
+    if(msg.type==="producer_join" && msg.producer){
       producers=producers.filter(function(p){return p.id!==msg.producer.id;}).concat([msg.producer]);
       renderCams();
-      if(!activeId&&msg.producer.online) selectProducer(msg.producer.id,false);
+      // Reenganchar preview cuando llega SFU
+      ensurePreview(msg.producer, !!msg.producer.sfuSessionId);
+      if(!activeId&&msg.producer.online&&!mosaicIds.length) selectProducer(msg.producer.id,false);
+    }
+    if(msg.type==="producer_sfu" && msg.producer){
+      producers=producers.filter(function(p){return p.id!==msg.producer.id;}).concat([msg.producer]);
+      ensurePreview(msg.producer, true);
+      if(activeId===msg.producer.id) selectProducer(msg.producer.id,false);
+      renderCams();
     }
     if(msg.type==="producer_leave"){
       producers=producers.map(function(p){ return p.id===msg.id?Object.assign({},p,{online:false}):p; });
+      mosaicIds=mosaicIds.filter(function(id){return id!==msg.id;});
       renderCams();
     }
     if(msg.type==="quality"&&msg.producer){
