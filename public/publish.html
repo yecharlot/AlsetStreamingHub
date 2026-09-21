@@ -119,7 +119,7 @@
       setStatus("Conectando sala…");
       connectWs();
       setStatus("Publicando señal (SFU)…");
-      pub = await H.sfuPublish(stream, myId);
+      pub = await H.sfuPublish(stream);
       sendSfuBind();
       setStatus("En transmisión · no cierres esta pestaña", "on");
       badge.classList.add("on");
