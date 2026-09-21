@@ -3,107 +3,67 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
-<title>Alset Streaming Hub</title>
-<meta name="description" content="Transmisiones multi-cámara en vivo — red Alset + WebRTC"/>
+<title>Alset Live</title>
+<meta name="description" content="Transmisión multi-cámara para deportes y eventos"/>
 <link rel="stylesheet" href="/styles.css"/>
 </head>
 <body>
 <div class="shell">
-  <header class="top">
-    <div>
-      <h1>Alset <span>Live</span></h1>
-      <p class="tag">Deportes en vivo (béisbol, fútbol y más) · multi-cámara · mesa Alset Runtime · mejor señal</p>
+  <header class="brand">
+    <div class="brand-mark">
+      <div class="logo">A</div>
+      <div>
+        <h1>Alset <span>Live</span></h1>
+        <p>Multi-cámara · deportes y eventos</p>
+      </div>
     </div>
-    <span class="badge">WebRTC + DO</span>
+    <span class="pill">En vivo</span>
   </header>
 
   <section class="card">
-    <h2>Desde el móvil</h2>
-    <p class="muted">Abre la URL con <strong>https://</strong> en Chrome o Safari (no app in-app browser si bloquea cámara). Permite cámara y micrófono. Mismo <code>match</code> en todos los dispositivos.</p>
-    <pre class="out" id="baseUrl">—</pre>
-  </section>
-  <section class="hero card">
-    <h2>Ver un partido</h2>
-    <p class="muted">Entra con el código de partido y tu ticket (si el organizador lo requiere).</p>
-    <label>ID del partido</label>
-    <input id="matchId" value="evento-demo" placeholder="evento-demo"/>
-    <label>Ticket (opcional si aún no hay entradas)</label>
-    <input id="ticket" placeholder="ABC123"/>
-    <div class="row">
-      <a class="btn primary" id="btnWatch" href="#">Ver en vivo</a>
-      <a class="btn primary" id="btnDirector" href="#">Mesa Alset (Runtime)</a>
+    <h2>¿Qué quieres hacer?</h2>
+    <p class="muted">Misma clave de evento en todos los dispositivos. Simple y rápido.</p>
+    <label>Nombre del evento</label>
+    <input id="matchId" value="evento-demo" placeholder="ej. beisbol-domingo"/>
+    <label>Ticket (solo si te lo pidieron)</label>
+    <input id="ticket" placeholder="Opcional"/>
+    <div class="row hero-actions">
+      <a class="btn primary" id="btnWatch" href="#">Ver transmisión</a>
+      <a class="btn ghost" id="btnPublish" href="#">Transmitir</a>
     </div>
   </section>
 
   <section class="card">
-    <h2>Producción (híbrido)</h2>
-    <p class="muted">Previews de cada móvil, elegir la mejor imagen, zoom, captura y giro 3D tipo retransmisión. SFU Cloudflare + mesh de respaldo.</p>
-    <div class="row">
-      <a class="btn primary" href="/production.html?match=evento-demo&sport=beisbol">Abrir mesa</a>
-    </div>
-  </section>
-  <section class="card">
-    <h2>Transmitir desde el móvil</h2>
-    <p class="muted">El trabajo pesado (cámara y encode) queda en tu dispositivo. El hub solo coordina.</p>
-    <label>Tu nombre de cámara</label>
-    <input id="camLabel" placeholder="Tribuna este"/>
-    <div class="row">
-      <a class="btn primary" id="btnPublish" href="#">Empezar a transmitir</a>
+    <h2>Cómo usarlo</h2>
+    <div class="steps">
+      <div class="step"><n>1</n><div><b>Elige un nombre de evento</b><br/><span>Igual en el móvil que graba y en quien mira.</span></div></div>
+      <div class="step"><n>2</n><div><b>En el campo: Transmitir</b><br/><span>Permite cámara y micrófono. Listo.</span></div></div>
+      <div class="step"><n>3</n><div><b>En casa o grada: Ver</b><br/><span>Elige la mejor cámara si hay varias.</span></div></div>
     </div>
   </section>
 
-  <section class="card">
-    <h2>Organizador</h2>
-    <p class="muted">Genera tickets de acceso (requiere clave admin en el worker si está configurada).</p>
-    <input id="adminKey" type="password" placeholder="X-Admin-Key (si aplica)"/>
-    <div class="row">
-      <button type="button" class="btn" id="btnTicket">Crear ticket</button>
-    </div>
-    <pre id="adminOut" class="out">—</pre>
-  </section>
-
-  <footer class="foot">
-    Ecosistema Alset · UI también en Render · medios SFU Cloudflare · DO + tickets
-  </footer>
+  <p class="foot">
+    Alset Live · señal ligera · varias cámaras · béisbol, fútbol y más
+  </p>
+  <div class="nav-mini">
+    <a id="btnDirector" href="#">Producción avanzada</a>
+  </div>
 </div>
 <script>
 const match = () => (document.getElementById('matchId').value || 'evento-demo').trim();
 const ticket = () => (document.getElementById('ticket').value || '').trim();
 document.getElementById('btnWatch').onclick = (e) => {
   e.preventDefault();
-  location.href = `/watch.html?match=${encodeURIComponent(match())}&ticket=${encodeURIComponent(ticket())}`;
-};
-document.getElementById('btnDirector').onclick = (e) => {
-  e.preventDefault();
-  location.href = `/production.html?match=${encodeURIComponent(match())}&ticket=${encodeURIComponent(ticket())}&sport=beisbol`;
+  location.href = '/watch.html?match=' + encodeURIComponent(match()) + '&ticket=' + encodeURIComponent(ticket());
 };
 document.getElementById('btnPublish').onclick = (e) => {
   e.preventDefault();
-  const label = document.getElementById('camLabel').value || 'Camara';
-  location.href = `/publish.html?match=${encodeURIComponent(match())}&label=${encodeURIComponent(label)}`;
+  location.href = '/publish.html?match=' + encodeURIComponent(match()) + '&label=Camara';
 };
-document.getElementById('btnTicket').onclick = async () => {
-  const out = document.getElementById('adminOut');
-  out.textContent = '…';
-  try {
-    const r = await fetch('/api/admin/ticket', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Admin-Key': document.getElementById('adminKey').value || ''
-      },
-      body: JSON.stringify({ matchId: match(), maxUses: 100, label: 'entrada' })
-    });
-    out.textContent = JSON.stringify(await r.json(), null, 2);
-  } catch (err) {
-    out.textContent = String(err);
-  }
+document.getElementById('btnDirector').onclick = (e) => {
+  e.preventDefault();
+  location.href = '/director.html?match=' + encodeURIComponent(match()) + '&ticket=' + encodeURIComponent(ticket());
 };
-document.getElementById('baseUrl').textContent = location.origin + '\n' + location.origin + '/publish.html?match=evento-demo';
-fetch('/api/health').then(r=>r.json()).then(j=>{
-  document.getElementById('baseUrl').textContent += '\nSFU: ' + (j.sfu ? 'activo' : 'inactivo');
-}).catch(e=>{});
 </script>
 </body>
 </html>
-<!-- v021 -->

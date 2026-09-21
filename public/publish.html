@@ -4,57 +4,78 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
-<title>Transmitir</title>
+<title>Transmitir · Alset Live</title>
 <link rel="stylesheet" href="/styles.css"/>
 </head>
 <body>
 <div class="shell">
-  <header class="top">
-    <div>
-      <h1>Transmitir</h1>
-      <p class="tag">Cámara de campo · béisbol, fútbol u otro deporte</p>
+  <header class="brand">
+    <div class="brand-mark">
+      <div class="logo">TX</div>
+      <div>
+        <h1>Transmitir</h1>
+        <p>Este teléfono es la cámara</p>
+      </div>
     </div>
-    <a class="btn" href="/">Inicio</a>
+    <a class="btn ghost" href="/" style="min-height:36px;padding:0.4rem 0.85rem;font-size:0.78rem">Inicio</a>
   </header>
-  <div class="stage"><video id="local" muted playsinline autoplay></video></div>
-  <div class="bar">
-    <button class="btn primary" id="btnStart" type="button">Iniciar</button>
-    <button class="btn" id="btnStop" type="button" disabled>Parar</button>
-    <span class="status" id="st">Listo</span>
+
+  <div class="stage">
+    <video id="local" muted playsinline autoplay></video>
+    <div class="live-badge" id="liveBadge"><i></i> EN VIVO</div>
   </div>
-  <pre class="out" id="log">Pulsa Iniciar y acepta cámara/micrófono.</pre>
+
+  <div class="card" style="margin-top:0.85rem">
+    <label>Nombre de esta cámara</label>
+    <input id="camLabel" placeholder="Home plate, Left field, Tribuna…"/>
+    <div class="bar">
+      <button class="btn primary" id="btnStart" type="button" style="flex:1">Iniciar cámara</button>
+      <button class="btn" id="btnStop" type="button" disabled>Parar</button>
+    </div>
+    <p class="status" id="st">Listo · toca Iniciar y acepta permisos</p>
+    <pre class="out" id="log" style="display:none"></pre>
+  </div>
+
+  <p class="foot">Mantén la pantalla encendida. Quien mira usa el mismo nombre de evento.</p>
 </div>
 <script src="/hub.js"></script>
 <script>
 (function () {
   var H = window.AlsetHub;
-  var matchId = H.qs("match", "partido-demo");
-  var label = H.qs("label", "Camara");
+  var matchId = H.qs("match", "evento-demo");
+  var labelInput = document.getElementById("camLabel");
+  labelInput.value = H.qs("label", "") || "Camara";
   var myId = "pub-" + Math.random().toString(36).slice(2, 8);
   var logEl = document.getElementById("log");
   var st = document.getElementById("st");
+  var badge = document.getElementById("liveBadge");
   var video = document.getElementById("local");
   var stream, ws, pub, mesh;
 
   function log(m) {
+    logEl.style.display = "block";
     logEl.textContent = typeof m === "string" ? m : JSON.stringify(m, null, 2);
+  }
+  function setStatus(t, cls) {
+    st.textContent = t;
+    st.className = "status" + (cls ? " " + cls : "");
   }
 
   document.getElementById("btnStart").onclick = async function () {
     try {
-      st.textContent = "Cámara…";
+      setStatus("Pidiendo cámara…");
       stream = await H.getCam();
       video.srcObject = stream;
       video.play().catch(function () {});
-      st.textContent = "SFU…";
+      setStatus("Conectando señal…");
       pub = await H.sfuPublish(stream, myId);
-      st.textContent = "En vivo";
-      st.classList.add("on");
+      setStatus("En vivo · no cierres esta pestaña", "on");
+      badge.classList.add("on");
       document.getElementById("btnStop").disabled = false;
+      document.getElementById("btnStart").disabled = true;
       connectWs();
-      log({ ok: true, mode: "sfu", sessionId: pub.sessionId, tracks: pub.tracks });
     } catch (e) {
-      st.textContent = "Error";
+      setStatus("No se pudo iniciar", "err");
       log(String(e.message || e));
     }
   };
@@ -64,11 +85,14 @@
     try { pub && pub.pc && pub.pc.close(); } catch (_) {}
     try { mesh && mesh.close(); } catch (_) {}
     try { ws && ws.close(); } catch (_) {}
-    st.textContent = "Parado";
-    st.classList.remove("on");
+    badge.classList.remove("on");
+    document.getElementById("btnStart").disabled = false;
+    document.getElementById("btnStop").disabled = true;
+    setStatus("Detenido");
   };
 
   function connectWs() {
+    var label = (labelInput.value || "Camara").trim();
     ws = new WebSocket(H.wsUrl(matchId, { role: "publisher", id: myId, label: label }));
     mesh = H.meshPublisherAttach(stream, ws, myId);
     ws.onopen = function () {
@@ -76,11 +100,9 @@
     };
     ws.onmessage = function (ev) {
       var msg = JSON.parse(ev.data);
-      if (msg.type === "signal" && msg.data && mesh) {
-        mesh.handleSignal(msg.from, msg.data);
-      }
+      if (msg.type === "signal" && msg.data && mesh) mesh.handleSignal(msg.from, msg.data);
     };
-    ws.onerror = function () { log("WebSocket error"); };
+    ws.onerror = function () { setStatus("Problema de red", "err"); };
     setInterval(function () {
       if (ws && ws.readyState === 1) {
         ws.send(JSON.stringify({ type: "quality", quality: 0.9, fps: 24, bitrate: 1 }));
