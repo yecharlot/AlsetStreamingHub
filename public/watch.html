@@ -3,372 +3,234 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"/>
-<title>Ver · Alset Live</title>
+<meta name="theme-color" content="#06060b"/>
+<title>RX · Alset Live</title>
 <link rel="stylesheet" href="/styles.css"/>
-<style>
-  .cam video {
-    width: 100%;
-    aspect-ratio: 16/9;
-    object-fit: cover;
-    background: #000;
-    border-radius: 10px;
-    display: block;
-  }
-  .cam .meta { display: flex; justify-content: space-between; align-items: center; gap: 0.35rem; margin-top: 0.35rem; }
-  .cam .tag-live {
-    font-size: 0.62rem; font-weight: 800; letter-spacing: 0.04em;
-    color: #fff; background: rgba(255,60,60,.9); padding: 0.15rem 0.4rem; border-radius: 4px;
-  }
-  .empty-state {
-    text-align: center; padding: 1.25rem 0.75rem; color: var(--muted); font-size: 0.85rem; line-height: 1.45;
-  }
-  .count-pill {
-    font-size: 0.75rem; color: var(--gold); font-weight: 600;
-  }
-</style>
 </head>
 <body>
 <div class="shell">
-  <header class="brand">
-    <div class="brand-mark">
+  <header class="topbar">
+    <div class="brand">
       <div class="logo">RX</div>
       <div>
         <h1 id="title">Ver en vivo</h1>
-        <p id="sub">Evento <b id="matchShow">—</b> · previews de quien transmite</p>
+        <div class="sub">Evento <strong id="matchShow">—</strong></div>
       </div>
     </div>
-    <a class="btn ghost" href="/" style="min-height:36px;padding:0.4rem 0.85rem;font-size:0.78rem">Inicio</a>
+    <a class="btn ghost sm" href="/">Inicio</a>
   </header>
 
   <div class="stage">
     <video id="remote" playsinline autoplay controls muted></video>
     <div class="live-badge" id="liveBadge"><i></i> EN VIVO</div>
+    <div class="stage-hud">
+      <span id="hudCam">Sin cámara</span>
+      <span id="hudCount">0 señales</span>
+    </div>
   </div>
 
   <div class="bar">
     <span class="status" id="st">Conectando…</span>
-    <span class="count-pill" id="countPill"></span>
-    <button class="btn ghost" type="button" id="btnBest" style="min-height:36px;padding:0.4rem 0.85rem;font-size:0.78rem">Mejor señal</button>
-    <button class="btn ghost" type="button" id="btnSound" style="min-height:36px;padding:0.4rem 0.85rem;font-size:0.78rem">Sonido</button>
+    <button class="btn ghost sm" type="button" id="btnBest">Mejor señal</button>
+    <button class="btn ghost sm" type="button" id="btnSound">Sonido</button>
   </div>
 
   <div class="card">
-    <h2>Cámaras en vivo</h2>
-    <p class="muted" id="hint" style="display:none"></p>
+    <h2>Señales en el evento</h2>
     <div class="cams" id="cams"></div>
-    <div class="empty-state" id="empty">Buscando cámaras de este evento…</div>
+    <div class="empty" id="empty">Buscando cámaras activas en este evento…</div>
   </div>
 
   <pre class="out" id="log" style="display:none"></pre>
-  <p class="foot">Todas las que estén transmitiendo aparecen aquí con preview. Toca una para el programa principal.</p>
+  <p class="foot">Solo aparecen dispositivos que están transmitiendo ahora. Toca un preview para el programa.</p>
 </div>
 <script src="/hub.js"></script>
 <script>
-(function () {
+(function(){
   var H = window.AlsetHub;
-  var matchId = H.qs("match", "evento-demo");
-  var matchShowEl = document.getElementById("matchShow");
-  if (matchShowEl) matchShowEl.textContent = matchId;
-  var ticket = H.qs("ticket", "");
-  var myId = "view-" + Math.random().toString(36).slice(2, 8);
+  var matchId = H.qs("match","evento-demo");
+  var ticket = H.qs("ticket","");
+  var titleQ = H.qs("title","");
+  if (titleQ) document.getElementById("title").textContent = titleQ;
+  document.getElementById("matchShow").textContent = matchId;
+
+  var myId = "view-"+Math.random().toString(36).slice(2,8);
   var st = document.getElementById("st");
   var logEl = document.getElementById("log");
   var camsEl = document.getElementById("cams");
   var emptyEl = document.getElementById("empty");
   var video = document.getElementById("remote");
   var badge = document.getElementById("liveBadge");
-  var countPill = document.getElementById("countPill");
-  var producers = [];
-  var activeId = null;
-  var programSession = null;
-  var previewSessions = {};
+  var hudCam = document.getElementById("hudCam");
+  var hudCount = document.getElementById("hudCount");
+  var producers = [], activeId = null, programSession = null, previewSessions = {}, ws;
   var MAX_PREVIEWS = 8;
-  var ws;
 
-  function log(m) {
-    logEl.style.display = "block";
-    logEl.textContent = typeof m === "string" ? m : JSON.stringify(m, null, 2);
+  function setStatus(t,cls){ st.textContent=t; st.className="status"+(cls?" "+cls:""); }
+  function log(m){ logEl.style.display="block"; logEl.textContent=typeof m==="string"?m:JSON.stringify(m,null,2); }
+  function bestProducer(){
+    return producers.filter(function(p){return p.online;}).sort(function(a,b){return (b.quality||0)-(a.quality||0);})[0];
   }
-  function setStatus(t, cls) {
-    st.textContent = t;
-    st.className = "status" + (cls ? " " + cls : "");
-  }
+  function onlineList(){ return producers.filter(function(p){return p.online;}); }
 
-  document.getElementById("btnSound").onclick = function () {
-    video.muted = false;
-    video.play().catch(function () {});
-  };
-  document.getElementById("btnBest").onclick = function () {
-    var b = bestProducer();
-    if (b) selectProducer(b.id, true);
-  };
+  document.getElementById("btnSound").onclick = function(){ video.muted=false; video.play().catch(function(){}); };
+  document.getElementById("btnBest").onclick = function(){ var b=bestProducer(); if(b) selectProducer(b.id,true); };
 
-  function bestProducer() {
-    return producers
-      .filter(function (p) { return p.online; })
-      .sort(function (a, b) { return (b.quality || 0) - (a.quality || 0); })[0];
-  }
-
-  function onlineList() {
-    return producers.filter(function (p) { return p.online; });
-  }
-
-  function renderCams() {
+  function renderCams(){
     var online = onlineList();
     var best = bestProducer();
-    countPill.textContent = online.length ? online.length + " en vivo" : "";
+    hudCount.textContent = online.length + (online.length===1?" señal":" señales");
     emptyEl.style.display = online.length ? "none" : "block";
-    emptyEl.textContent = online.length
-      ? ""
-      : "Nadie transmite aún en «" + matchId + "». Cuando un móvil pulse Iniciar, el preview sale aquí.";
+    emptyEl.textContent = "Nadie transmite en «"+matchId+"». Abre Transmitir en un móvil con el mismo evento.";
 
-    // Keep existing video elements if same ids to avoid flicker
-    var existing = {};
-    Array.prototype.forEach.call(camsEl.querySelectorAll(".cam"), function (el) {
-      existing[el.getAttribute("data-id")] = el;
+    camsEl.innerHTML = online.map(function(p){
+      var q=(p.quality||0)>=0.7?"q":(p.quality||0)>=0.4?"q mid":"q low";
+      var act=p.id===activeId?"active":"";
+      var bestCls=best&&best.id===p.id?"best":"";
+      return '<div class="cam '+act+' '+bestCls+'" data-id="'+p.id+'">'+
+        '<video muted playsinline autoplay data-vid="'+p.id+'"></video>'+
+        '<div class="meta"><strong>'+(p.label||p.id)+'</strong><span class="tag-live">LIVE</span></div>'+
+        '<div class="'+q+'">'+Math.round((p.quality||0)*100)+'% · '+(p.sfuSessionId?"SFU":"directo")+
+        (best&&best.id===p.id?" · recomendada":"")+"</div></div>";
+    }).join("");
+
+    Array.prototype.forEach.call(camsEl.querySelectorAll(".cam"), function(el){
+      el.onclick = function(){ selectProducer(el.getAttribute("data-id"), true); };
     });
-
-    var html = online
-      .map(function (p) {
-        var q = (p.quality || 0) >= 0.7 ? "q" : (p.quality || 0) >= 0.4 ? "q mid" : "q low";
-        var act = p.id === activeId ? "active" : "";
-        var bestCls = best && best.id === p.id ? "best" : "";
-        return (
-          '<div class="cam ' + act + " " + bestCls + '" data-id="' + p.id + '">' +
-          '<video muted playsinline autoplay data-vid="' + p.id + '"></video>' +
-          '<div class="meta"><strong>' +
-          (p.label || p.id) +
-          '</strong><span class="tag-live">LIVE</span></div>' +
-          '<div class="' + q + '">' +
-          Math.round((p.quality || 0) * 100) +
-          "% · " +
-          (p.sfuSessionId ? "SFU" : "enlace") +
-          (best && best.id === p.id ? " · mejor" : "") +
-          "</div></div>"
-        );
-      })
-      .join("");
-
-    camsEl.innerHTML = html;
-
-    Array.prototype.forEach.call(camsEl.querySelectorAll(".cam"), function (el) {
-      el.onclick = function () {
-        selectProducer(el.getAttribute("data-id"), true);
-      };
-    });
-
-    online.slice(0, MAX_PREVIEWS).forEach(function (p) {
-      ensurePreview(p);
-    });
-    Object.keys(previewSessions).forEach(function (id) {
-      if (!online.find(function (p) { return p.id === id; })) {
-        try {
-          previewSessions[id].close();
-        } catch (_) {}
+    online.slice(0, MAX_PREVIEWS).forEach(function(p){ ensurePreview(p); });
+    Object.keys(previewSessions).forEach(function(id){
+      if(!online.find(function(p){return p.id===id;})){
+        try{ previewSessions[id].close(); }catch(_){}
         delete previewSessions[id];
       }
     });
   }
 
-  async function ensurePreview(p) {
-    var videoEl = camsEl.querySelector('video[data-vid="' + p.id + '"]');
-    if (!videoEl) return;
-
-    // Already have a session — rebind stream to new video element after re-render
-    if (previewSessions[p.id] && previewSessions[p.id].stream) {
+  async function ensurePreview(p){
+    var videoEl = camsEl.querySelector('video[data-vid="'+p.id+'"]');
+    if(!videoEl) return;
+    if(previewSessions[p.id] && previewSessions[p.id].stream){
       videoEl.srcObject = previewSessions[p.id].stream;
-      videoEl.play().catch(function () {});
+      videoEl.play().catch(function(){});
       return;
     }
-    if (previewSessions[p.id] && !previewSessions[p.id].stream) {
-      // connecting
-      return;
-    }
-
-    var closed = false;
-    var handle = {
-      stream: null,
-      close: function () {
-        closed = true;
-      },
-    };
-    previewSessions[p.id] = handle;
-
-    try {
-      if (p.sfuSessionId && p.tracks && p.tracks.length) {
+    if(previewSessions[p.id]) return;
+    var closed=false;
+    var handle={ stream:null, close:function(){ closed=true; } };
+    previewSessions[p.id]=handle;
+    try{
+      if(p.sfuSessionId && p.tracks && p.tracks.length){
         var pull = await H.sfuPull(p.sfuSessionId, p.tracks);
-        if (closed) {
-          pull.pc.close();
-          return;
-        }
+        if(closed){ pull.pc.close(); return; }
         handle.stream = pull.stream;
-        handle.close = function () {
-          closed = true;
-          try {
-            pull.pc.close();
-          } catch (_) {}
-        };
-        var el = camsEl.querySelector('video[data-vid="' + p.id + '"]');
-        if (el) {
-          el.srcObject = pull.stream;
-          el.play().catch(function () {});
-        }
+        handle.close = function(){ closed=true; try{ pull.pc.close(); }catch(_){ } };
+        var el = camsEl.querySelector('video[data-vid="'+p.id+'"]');
+        if(el){ el.srcObject=pull.stream; el.play().catch(function(){}); }
         return;
       }
-      if (!ws || ws.readyState !== 1) {
-        delete previewSessions[p.id];
-        return;
-      }
-      var mesh = await H.meshPull(ws, p.id, function (stream) {
-        handle.stream = stream;
-        var el2 = camsEl.querySelector('video[data-vid="' + p.id + '"]');
-        if (el2) {
-          el2.srcObject = stream;
-          el2.play().catch(function () {});
-        }
+      if(!ws||ws.readyState!==1){ delete previewSessions[p.id]; return; }
+      var mesh = await H.meshPull(ws, p.id, function(stream){
+        handle.stream=stream;
+        var el2=camsEl.querySelector('video[data-vid="'+p.id+'"]');
+        if(el2){ el2.srcObject=stream; el2.play().catch(function(){}); }
       });
-      handle.mesh = mesh;
-      handle.close = function () {
-        closed = true;
-        try {
-          mesh.close();
-        } catch (_) {}
-      };
-    } catch (e) {
-      console.warn("preview", p.id, e);
-      delete previewSessions[p.id];
-    }
+      handle.mesh=mesh;
+      handle.close=function(){ closed=true; try{ mesh.close(); }catch(_){ } };
+    }catch(e){ console.warn(e); delete previewSessions[p.id]; }
   }
 
-  async function selectProducer(id, userClick) {
-    if (!id || !ws) return;
-    activeId = id;
+  async function selectProducer(id, userClick){
+    if(!id||!ws) return;
+    activeId=id;
+    var p=producers.filter(function(x){return x.id===id;})[0];
+    if(!p||!p.online) return;
     renderCams();
-    var p = producers.filter(function (x) { return x.id === id; })[0];
-    if (!p || !p.online) return;
-
-    if (programSession && programSession.close) {
-      try {
-        programSession.close();
-      } catch (_) {}
-      programSession = null;
-    }
-
-    setStatus("Cargando «" + (p.label || id) + "»…");
+    hudCam.textContent = p.label||id;
+    if(programSession&&programSession.close) try{ programSession.close(); }catch(_){}
+    programSession=null;
+    setStatus("Conectando «"+(p.label||id)+"»…");
     badge.classList.remove("on");
 
-    // Reuse preview stream (ligero)
-    var prev = previewSessions[id];
-    if (prev && prev.stream) {
-      video.srcObject = prev.stream;
-      video.muted = true;
-      video.play().catch(function () {});
-      setStatus("En vivo · " + (p.label || id), "on");
+    var prev=previewSessions[id];
+    if(prev&&prev.stream){
+      video.srcObject=prev.stream; video.muted=true;
+      video.play().catch(function(){});
+      setStatus("Programa · "+(p.label||id), "on");
       badge.classList.add("on");
-      programSession = {
-        close: function () {},
-        handleSignal: prev.mesh ? prev.mesh.handleSignal.bind(prev.mesh) : null,
-      };
+      programSession={ close:function(){}, handleSignal:prev.mesh?prev.mesh.handleSignal.bind(prev.mesh):null };
       return;
     }
-
-    if (p.sfuSessionId && p.tracks && p.tracks.length) {
-      try {
-        programSession = await H.sfuPull(p.sfuSessionId, p.tracks);
-        video.srcObject = programSession.stream;
-        video.muted = true;
-        await video.play().catch(function () {});
-        setStatus("En vivo · " + (p.label || id), "on");
+    if(p.sfuSessionId&&p.tracks&&p.tracks.length){
+      try{
+        programSession=await H.sfuPull(p.sfuSessionId,p.tracks);
+        video.srcObject=programSession.stream; video.muted=true;
+        await video.play().catch(function(){});
+        setStatus("Programa · "+(p.label||id), "on");
         badge.classList.add("on");
         return;
-      } catch (e) {
-        if (userClick) log("SFU: " + (e.message || e));
-      }
+      }catch(e){ if(userClick) log("SFU: "+(e.message||e)); }
     }
-
-    try {
-      programSession = await H.meshPull(ws, id, function (stream) {
-        video.srcObject = stream;
-        video.muted = true;
-        video.play().catch(function () {});
-        setStatus("En vivo · " + (p.label || id), "on");
+    try{
+      programSession=await H.meshPull(ws,id,function(stream){
+        video.srcObject=stream; video.muted=true; video.play().catch(function(){});
+        setStatus("Programa · "+(p.label||id), "on");
         badge.classList.add("on");
       });
-    } catch (e) {
-      setStatus("No se pudo ver esta cámara", "err");
-      if (userClick) log(String(e.message || e));
+    }catch(e){
+      setStatus("No se pudo ver esta señal", "err");
+      if(userClick) log(String(e.message||e));
     }
   }
 
-  
-  // Respaldo: si el WS pierde un join, el estado HTTP refresca la lista
-  async function refreshFromHttp() {
-    try {
-      var r = await fetch("/api/room/" + encodeURIComponent(matchId) + "/state");
-      var msg = await r.json();
-      if (msg && msg.producers) {
-        producers = msg.producers;
+  async function refreshFromHttp(){
+    try{
+      var r=await fetch("/api/room/"+encodeURIComponent(matchId)+"/state");
+      var msg=await r.json();
+      if(msg&&msg.producers){
+        producers=msg.producers;
         renderCams();
-        if (!activeId) {
-          var b = bestProducer();
-          if (b) selectProducer(b.id, false);
-        }
+        if(!activeId){ var b=bestProducer(); if(b) selectProducer(b.id,false); }
       }
-    } catch (e) {}
+    }catch(e){}
   }
   setInterval(refreshFromHttp, 4000);
-  setTimeout(refreshFromHttp, 800);
+  setTimeout(refreshFromHttp, 600);
 
-  ws = new WebSocket(H.wsUrl(matchId, { role: "viewer", id: myId, ticket: ticket }));
-  ws.onopen = function () {
-    setStatus("Sala conectada · " + matchId);
-  };
-  ws.onerror = function () {
-    setStatus("Sin conexión", "err");
-  };
-  ws.onclose = function (ev) {
+  ws=new WebSocket(H.wsUrl(matchId,{ role:"viewer", id:myId, ticket:ticket }));
+  ws.onopen=function(){ setStatus("Sala · "+matchId); };
+  ws.onerror=function(){ setStatus("Sin conexión", "err"); };
+  ws.onclose=function(ev){
     setStatus("Desconectado", "err");
-    if (ev.code === 4003) log("Este evento requiere ticket");
+    if(ev.code===4003) log("Ticket requerido o inválido");
   };
-  ws.onmessage = function (ev) {
-    var msg = JSON.parse(ev.data);
-    if (msg.type === "room_state" || msg.type === "presence") {
-      if (msg.meta && msg.meta.title) document.getElementById("title").textContent = msg.meta.title;
-      producers = msg.producers || producers;
+  ws.onmessage=function(ev){
+    var msg=JSON.parse(ev.data);
+    if(msg.type==="room_state"||msg.type==="presence"){
+      if(msg.meta&&msg.meta.title&&!titleQ) document.getElementById("title").textContent=msg.meta.title;
+      producers=msg.producers||producers;
       renderCams();
-      if (!activeId) {
-        var b = bestProducer();
-        if (b) selectProducer(b.id, false);
-      }
+      if(!activeId){ var b=bestProducer(); if(b) selectProducer(b.id,false); }
     }
-    if (msg.type === "producer_join") {
-      producers = producers
-        .filter(function (p) {
-          return p.id !== msg.producer.id;
-        })
-        .concat([msg.producer]);
+    if(msg.type==="producer_join"){
+      producers=producers.filter(function(p){return p.id!==msg.producer.id;}).concat([msg.producer]);
       renderCams();
-      if (!activeId && msg.producer.online) selectProducer(msg.producer.id, false);
+      if(!activeId&&msg.producer.online) selectProducer(msg.producer.id,false);
     }
-    if (msg.type === "producer_leave") {
-      producers = producers.map(function (p) {
-        return p.id === msg.id ? Object.assign({}, p, { online: false }) : p;
-      });
+    if(msg.type==="producer_leave"){
+      producers=producers.map(function(p){ return p.id===msg.id?Object.assign({},p,{online:false}):p; });
       renderCams();
     }
-    if (msg.type === "quality" && msg.producer) {
-      producers = producers.map(function (p) {
-        return p.id === msg.id ? Object.assign({}, p, msg.producer) : p;
-      });
+    if(msg.type==="quality"&&msg.producer){
+      producers=producers.map(function(p){ return p.id===msg.id?Object.assign({},p,msg.producer):p; });
       renderCams();
     }
-    if (msg.type === "signal" && msg.from === activeId && programSession && programSession.handleSignal) {
+    if(msg.type==="signal"&&msg.from===activeId&&programSession&&programSession.handleSignal){
       programSession.handleSignal(msg.data);
     }
-    if (msg.type === "signal" && previewSessions[msg.from] && previewSessions[msg.from].mesh) {
+    if(msg.type==="signal"&&previewSessions[msg.from]&&previewSessions[msg.from].mesh){
       previewSessions[msg.from].mesh.handleSignal(msg.data);
     }
-    if (msg.type === "program" && msg.producerId) selectProducer(msg.producerId, false);
+    if(msg.type==="program"&&msg.producerId) selectProducer(msg.producerId,false);
   };
 })();
 </script>

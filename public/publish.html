@@ -4,109 +4,120 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
-<title>Transmitir · Alset Live</title>
+<meta name="theme-color" content="#06060b"/>
+<title>TX · Alset Live</title>
 <link rel="stylesheet" href="/styles.css"/>
 </head>
 <body>
 <div class="shell">
-  <header class="brand">
-    <div class="brand-mark">
+  <header class="topbar">
+    <div class="brand">
       <div class="logo">TX</div>
       <div>
         <h1>Transmitir</h1>
-        <p>Este teléfono es la cámara · evento <b id="matchShow">—</b></p>
+        <div class="sub">Evento <strong id="matchShow">—</strong></div>
       </div>
     </div>
-    <a class="btn ghost" href="/" style="min-height:36px;padding:0.4rem 0.85rem;font-size:0.78rem">Inicio</a>
+    <a class="btn ghost sm" href="/">Inicio</a>
   </header>
 
   <div class="stage">
     <video id="local" muted playsinline autoplay></video>
     <div class="live-badge" id="liveBadge"><i></i> EN VIVO</div>
+    <div class="stage-hud">
+      <span id="hudAngle">—</span>
+      <span id="hudNet">Listo</span>
+    </div>
   </div>
 
-  <div class="card" style="margin-top:0.85rem">
-    <label>Nombre de esta cámara</label>
-    <input id="camLabel" placeholder="Home plate, Left field, Tribuna…"/>
-    <div class="bar">
-      <button class="btn primary" id="btnStart" type="button" style="flex:1">Iniciar cámara</button>
-      <button class="btn" id="btnStop" type="button" disabled>Parar</button>
+  <div class="card" style="margin-top:0.8rem">
+    <h2>Configuración de cámara</h2>
+    <label>Ángulo / nombre</label>
+    <input id="camLabel" placeholder="Home plate · Left field · Tribuna…"/>
+    <div class="meter" title="Señal"><i id="meter"></i></div>
+    <div class="row">
+      <button class="btn primary" id="btnStart" type="button" style="flex:1.4">Iniciar transmisión</button>
+      <button class="btn" id="btnStop" type="button" disabled>Detener</button>
     </div>
-    <p class="status" id="st">Listo · toca Iniciar y acepta permisos</p>
+    <p class="status" id="st" style="margin-top:0.65rem">Pulsa iniciar y acepta cámara / micrófono</p>
     <pre class="out" id="log" style="display:none"></pre>
   </div>
 
-  <p class="foot">Mantén la pantalla encendida. Quien mira usa el mismo nombre de evento.</p>
+  <p class="foot">Mantén la app en primer plano. Quien mira debe usar el mismo ID de evento.</p>
 </div>
 <script src="/hub.js"></script>
 <script>
-(function () {
+(function(){
   var H = window.AlsetHub;
-  var matchId = H.qs("match", "evento-demo");
+  var matchId = H.qs("match","evento-demo");
   document.getElementById("matchShow").textContent = matchId;
   var labelInput = document.getElementById("camLabel");
-  labelInput.value = H.qs("label", "") || "Camara";
-  var myId = "pub-" + Math.random().toString(36).slice(2, 8);
-  var logEl = document.getElementById("log");
+  labelInput.value = H.qs("label","") || "Camara";
+  var myId = "pub-"+Math.random().toString(36).slice(2,8);
   var st = document.getElementById("st");
+  var logEl = document.getElementById("log");
   var badge = document.getElementById("liveBadge");
+  var meter = document.getElementById("meter");
+  var hudNet = document.getElementById("hudNet");
   var video = document.getElementById("local");
   var stream, ws, pub, mesh;
 
-  function log(m) {
-    logEl.style.display = "block";
-    logEl.textContent = typeof m === "string" ? m : JSON.stringify(m, null, 2);
-  }
-  function setStatus(t, cls) {
-    st.textContent = t;
-    st.className = "status" + (cls ? " " + cls : "");
-  }
+  function setStatus(t, cls){ st.textContent=t; st.className="status"+(cls?" "+cls:""); }
+  function log(m){ logEl.style.display="block"; logEl.textContent=typeof m==="string"?m:JSON.stringify(m,null,2); }
 
-  document.getElementById("btnStart").onclick = async function () {
+  document.getElementById("btnStart").onclick = async function(){
     try {
-      setStatus("Pidiendo cámara…");
+      setStatus("Solicitando cámara…");
       stream = await H.getCam();
       video.srcObject = stream;
-      video.play().catch(function () {});
-      setStatus("Conectando señal…");
+      await video.play().catch(function(){});
+      document.getElementById("hudAngle").textContent = (labelInput.value||"Camara").trim();
+      setStatus("Publicando señal…");
       pub = await H.sfuPublish(stream, myId);
-      setStatus("En vivo · no cierres esta pestaña", "on");
+      setStatus("En transmisión · no cierres esta pestaña", "on");
       badge.classList.add("on");
+      hudNet.textContent = "SFU conectado";
+      meter.style.width = "85%";
       document.getElementById("btnStop").disabled = false;
       document.getElementById("btnStart").disabled = true;
       connectWs();
-    } catch (e) {
+    } catch(e) {
       setStatus("No se pudo iniciar", "err");
-      log(String(e.message || e));
+      hudNet.textContent = "Error";
+      log(String(e.message||e));
     }
   };
 
-  document.getElementById("btnStop").onclick = function () {
-    try { stream && stream.getTracks().forEach(function (t) { t.stop(); }); } catch (_) {}
-    try { pub && pub.pc && pub.pc.close(); } catch (_) {}
-    try { mesh && mesh.close(); } catch (_) {}
-    try { ws && ws.close(); } catch (_) {}
+  document.getElementById("btnStop").onclick = function(){
+    try{ stream&&stream.getTracks().forEach(function(t){t.stop();}); }catch(_){}
+    try{ pub&&pub.pc&&pub.pc.close(); }catch(_){}
+    try{ mesh&&mesh.close(); }catch(_){}
+    try{ ws&&ws.close(); }catch(_){}
     badge.classList.remove("on");
+    meter.style.width = "0%";
     document.getElementById("btnStart").disabled = false;
     document.getElementById("btnStop").disabled = true;
-    setStatus("Detenido");
+    setStatus("Transmisión detenida");
+    hudNet.textContent = "Detenido";
   };
 
-  function connectWs() {
-    var label = (labelInput.value || "Camara").trim();
-    ws = new WebSocket(H.wsUrl(matchId, { role: "publisher", id: myId, label: label }));
+  function connectWs(){
+    var label = (labelInput.value||"Camara").trim();
+    ws = new WebSocket(H.wsUrl(matchId,{ role:"publisher", id:myId, label:label }));
     mesh = H.meshPublisherAttach(stream, ws, myId);
-    ws.onopen = function () {
-      ws.send(JSON.stringify({ type: "sfu_publish", sessionId: pub.sessionId, tracks: pub.tracks }));
+    ws.onopen = function(){
+      ws.send(JSON.stringify({ type:"sfu_publish", sessionId:pub.sessionId, tracks:pub.tracks }));
     };
-    ws.onmessage = function (ev) {
+    ws.onmessage = function(ev){
       var msg = JSON.parse(ev.data);
-      if (msg.type === "signal" && msg.data && mesh) mesh.handleSignal(msg.from, msg.data);
+      if(msg.type==="signal"&&msg.data&&mesh) mesh.handleSignal(msg.from, msg.data);
     };
-    ws.onerror = function () { setStatus("Problema de red", "err"); };
-    setInterval(function () {
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({ type: "quality", quality: 0.9, fps: 24, bitrate: 1 }));
+    ws.onerror = function(){ setStatus("Problema de red", "err"); hudNet.textContent="Red"; };
+    ws.onclose = function(){ if(badge.classList.contains("on")) setStatus("Señal caída · reabre Iniciar", "warn"); };
+    setInterval(function(){
+      if(ws&&ws.readyState===1){
+        ws.send(JSON.stringify({ type:"quality", quality:0.88, fps:24, bitrate:1 }));
+        meter.style.width = "70%";
       }
     }, 5000);
   }
