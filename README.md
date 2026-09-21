@@ -45,4 +45,8 @@ Variable opcional: `STREAM_ADMIN_KEY` en el dashboard del Worker.
 - Para muchos espectadores: añadir SFU (Cloudflare Calls / LiveKit) sin cambiar la UX del hub.
 - TURN puede ser necesario en redes restrictivas (ampliable).
 
+## SaaS (v1)
+
+Ver **[SAAS.md](SAAS.md)** — organizaciones, planes, genes de borde que nacen/mueren con la transmisión, consola en `/console.html`.
+
 MIT · Ecosistema Alset

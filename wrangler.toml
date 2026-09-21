@@ -11,10 +11,17 @@ binding = "ASSETS"
 name = "ROOM"
 class_name = "MatchRoom"
 
+[[durable_objects.bindings]]
+name = "SAAS"
+class_name = "SaaSRegistry"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MatchRoom"]
 
-# Optional: set STREAM_ADMIN_KEY in dashboard for creating matches / tickets
-# [vars]
-# PUBLIC_MODE = "true"
+[[migrations]]
+tag = "v2-saas"
+new_sqlite_classes = ["SaaSRegistry"]
+
+# Secrets / vars en dashboard:
+# STREAM_ADMIN_KEY, CALLS_APP_ID, CALLS_APP_SECRET

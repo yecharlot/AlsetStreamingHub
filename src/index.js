@@ -1,13 +1,14 @@
 /**
- * Alset Streaming Hub — Worker
- * Presence/tickets: Durable Object
- * Media path: Cloudflare Realtime SFU (Calls) when configured
+ * Alset Streaming Hub — Worker SaaS
+ * Genes de borde + MatchRoom DO + SFU Cloudflare Calls + registro de orgs
  */
 
 import { MatchRoom } from "./room.js";
+import { SaaSRegistry } from "./saas.js";
 import * as calls from "./calls.js";
+import { PLANS } from "./gene.js";
 
-export { MatchRoom };
+export { MatchRoom, SaaSRegistry };
 
 export default {
   async fetch(request, env, ctx) {
@@ -22,13 +23,23 @@ export default {
         return json({
           ok: true,
           service: "alset-streaming-hub",
-          v: "0.2.0",
+          v: "1.0.0-saas",
+          model: "alset-edge-gene-swarm",
           sfu: calls.callsConfigured(env),
-          secureHint: "Usa siempre HTTPS. En el móvil abre el enlace desde el navegador (Chrome/Safari), no un WebView restringido.",
+          plans: Object.keys(PLANS),
+          secureHint: "HTTPS obligatorio. Móvil: Chrome/Safari, no WebView restringido.",
         });
       }
 
-      // —— SFU proxies (secret stays on worker) ——
+      // —— SaaS registry DO ——
+      if (url.pathname.startsWith("/api/saas")) {
+        const stub = env.SAAS.get(env.SAAS.idFromName("global"));
+        const u = new URL(request.url);
+        u.pathname = url.pathname.replace(/^\/api\/saas/, "") || "/";
+        return withCors(await stub.fetch(new Request(u, request)));
+      }
+
+      // —— SFU proxies ——
       if (url.pathname === "/api/sfu/session" && request.method === "POST") {
         if (!calls.callsConfigured(env)) {
           return json({ error: "sfu_not_configured", message: "Falta CALLS_APP_ID / CALLS_APP_SECRET" }, 503);
@@ -55,36 +66,70 @@ export default {
         return json({ ok: true, result });
       }
 
-      if (url.pathname === "/api/sfu/close" && request.method === "POST") {
-        if (!calls.callsConfigured(env)) return json({ error: "sfu_not_configured" }, 503);
-        const body = await request.json();
-        const { sessionId, ...rest } = body;
-        const result = await calls.closeTracks(env, sessionId, rest);
-        return json({ ok: true, result });
+      // —— Room helpers ——
+      const roomState = url.pathname.match(/^\/api\/room\/([^/]+)\/state$/);
+      if (roomState && request.method === "GET") {
+        const matchId = sanitizeId(roomState[1]);
+        const stub = env.ROOM.get(env.ROOM.idFromName(matchId));
+        return withCors(await stub.fetch(new Request(new URL("/state", url.origin), request)));
       }
 
-      // Room HTTP + WS
-      const roomMatch = url.pathname.match(/^\/api\/room\/([^/]+)(\/.*)?$/);
-      if (roomMatch) {
-        const matchId = sanitizeId(roomMatch[1]);
-        const rest = roomMatch[2] || "/state";
+      const roomGenes = url.pathname.match(/^\/api\/room\/([^/]+)\/genes$/);
+      if (roomGenes && request.method === "GET") {
+        const matchId = sanitizeId(roomGenes[1]);
         const stub = env.ROOM.get(env.ROOM.idFromName(matchId));
-        const dest = new URL(request.url);
-        dest.pathname = rest;
-        return withCors(await stub.fetch(new Request(dest.toString(), request)));
+        return withCors(await stub.fetch(new Request(new URL("/genes", url.origin), request)));
+      }
+
+      const roomBoot = url.pathname.match(/^\/api\/room\/([^/]+)\/bootstrap$/);
+      if (roomBoot && request.method === "POST") {
+        const matchId = sanitizeId(roomBoot[1]);
+        const body = await request.json().catch(() => ({}));
+        // Optional: bind org from API key
+        let orgId = body.orgId || null;
+        let plan = body.plan || "free";
+        const apiKey = request.headers.get("X-API-Key");
+        if (apiKey && env.SAAS) {
+          const reg = env.SAAS.get(env.SAAS.idFromName("global"));
+          const me = await reg.fetch(
+            new Request("https://saas/me", { headers: { "X-API-Key": apiKey } })
+          );
+          const data = await me.json().catch(() => ({}));
+          if (data.ok && data.org) {
+            orgId = data.org.id;
+            plan = data.org.plan || plan;
+          }
+        }
+        const stub = env.ROOM.get(env.ROOM.idFromName(matchId));
+        return withCors(
+          await stub.fetch(
+            new Request(new URL("/bootstrap", url.origin), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ...body, matchId, orgId, plan }),
+            })
+          )
+        );
+      }
+
+      const roomEnd = url.pathname.match(/^\/api\/room\/([^/]+)\/end$/);
+      if (roomEnd && request.method === "POST") {
+        const matchId = sanitizeId(roomEnd[1]);
+        const stub = env.ROOM.get(env.ROOM.idFromName(matchId));
+        return withCors(await stub.fetch(new Request(new URL("/end", url.origin), { method: "POST" })));
       }
 
       const wsMatch = url.pathname.match(/^\/ws\/([^/]+)$/);
       if (wsMatch) {
         const matchId = sanitizeId(wsMatch[1]);
         const stub = env.ROOM.get(env.ROOM.idFromName(matchId));
-        // Forward original request (preserves Upgrade: websocket)
         return stub.fetch(request);
       }
 
       if (url.pathname === "/api/admin/ticket" && request.method === "POST") {
         const admin = env.STREAM_ADMIN_KEY;
-        if (admin && request.headers.get("X-Admin-Key") !== admin) {
+        const apiKey = request.headers.get("X-API-Key");
+        if (admin && request.headers.get("X-Admin-Key") !== admin && !apiKey) {
           return json({ error: "unauthorized" }, 401);
         }
         const body = await request.json().catch(() => ({}));
@@ -101,19 +146,17 @@ export default {
         );
       }
 
-      // Static assets (mobile-friendly cache)
       if (env.ASSETS) {
         const res = await env.ASSETS.fetch(request);
         const headers = new Headers(res.headers);
         headers.set("Access-Control-Allow-Origin", "*");
-        // Avoid stale HTML on phones
         if (url.pathname.endsWith(".html") || url.pathname === "/") {
           headers.set("Cache-Control", "no-store");
         }
         return new Response(res.body, { status: res.status, headers });
       }
 
-      return json({ ok: true, service: "alset-streaming-hub" });
+      return json({ ok: true, service: "alset-streaming-hub", v: "1.0.0-saas" });
     } catch (e) {
       return json({ error: e.message || String(e), data: e.data || null }, e.status || 500);
     }
@@ -132,8 +175,8 @@ function sanitizeId(s) {
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,X-Admin-Key",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,X-Admin-Key,X-API-Key",
   };
 }
 

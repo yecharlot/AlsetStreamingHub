@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alset Streaming · Consola SaaS</title>
+<link rel="stylesheet" href="/styles.css">
+<style>
+  body{font-family:system-ui,sans-serif;max-width:720px;margin:0 auto;padding:1.2rem;background:#0b0f14;color:#e8eef5}
+  h1{font-size:1.35rem} h2{font-size:1.05rem;margin-top:1.2rem}
+  .card{background:#121a22;border:1px solid #1e2a36;border-radius:12px;padding:1rem;margin:.7rem 0}
+  input,select,button{font:inherit;padding:.55rem .7rem;border-radius:8px;border:1px solid #2a3a4a;background:#0e151c;color:#e8eef5}
+  button{background:#3d8bfd;border-color:#3d8bfd;color:#fff;cursor:pointer;font-weight:600}
+  button.secondary{background:transparent;color:#9db0c2}
+  button.danger{background:#c23b5a;border-color:#c23b5a}
+  label{display:block;font-size:.75rem;color:#8a9bb0;margin:.4rem 0 .2rem}
+  .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:end}
+  .row > *{flex:1;min-width:120px}
+  .mono{font-family:ui-monospace,monospace;font-size:.8rem;word-break:break-all}
+  .ok{color:#3dd68c} .muted{color:#8a9bb0;font-size:.85rem}
+  a{color:#6eb6ff}
+  .links a{display:inline-block;margin:.2rem .5rem .2rem 0}
+</style>
+</head>
+<body>
+  <h1>Alset Streaming Hub · SaaS</h1>
+  <p class="muted">Genes de borde: nacen con cada cámara/viewer y se destruyen al cerrar el evento. SFU cuando el plan lo exige.</p>
+
+  <div class="card">
+    <h2>1. Crear organización</h2>
+    <div class="row">
+      <div><label>Nombre</label><input id="orgName" placeholder="Club Guantánamo"></div>
+      <div><label>Plan</label>
+        <select id="orgPlan"><option value="free">Free</option><option value="pro">Pro</option><option value="event">Evento</option></select>
+      </div>
+    </div>
+    <button id="btnCreateOrg" style="margin-top:.6rem">Crear y obtener API key</button>
+    <p class="mono" id="orgOut"></p>
+  </div>
+
+  <div class="card">
+    <h2>2. API key (guarda esto)</h2>
+    <input id="apiKey" placeholder="ash_…" style="width:100%">
+    <button id="btnMe" class="secondary" style="margin-top:.5rem">Ver mi plan</button>
+    <pre class="mono" id="meOut"></pre>
+  </div>
+
+  <div class="card">
+    <h2>3. Bootstrap evento (spawn room gene)</h2>
+    <div class="row">
+      <div><label>Match ID</label><input id="matchId" value="partido-demo"></div>
+      <div><label>Título</label><input id="matchTitle" value="Partido en vivo"></div>
+    </div>
+    <button id="btnBoot" style="margin-top:.6rem">Crear / abrir sala</button>
+    <button id="btnEnd" class="danger" style="margin-top:.6rem">Terminar evento (destruir genes)</button>
+    <pre class="mono" id="bootOut"></pre>
+    <div class="links" id="links"></div>
+  </div>
+
+  <div class="card">
+    <h2>4. Tickets de acceso</h2>
+    <div class="row">
+      <div><label>Max usos</label><input id="maxUses" type="number" value="50"></div>
+      <div><label>Label</label><input id="ticketLabel" value="entrada"></div>
+    </div>
+    <button id="btnTicket" style="margin-top:.6rem">Generar ticket</button>
+    <pre class="mono" id="ticketOut"></pre>
+  </div>
+
+  <div class="card">
+    <h2>5. Enjambre en vivo</h2>
+    <button id="btnGenes" class="secondary">Ver genes de la sala</button>
+    <button id="btnLive" class="secondary">Eventos live (registry)</button>
+    <pre class="mono" id="genesOut"></pre>
+  </div>
+
+  <p class="muted"><a href="/">Inicio hub</a> · modelo Alset edge-gene-swarm</p>
+<script>
+const $ = (id) => document.getElementById(id);
+const apiKey = () => $('apiKey').value.trim();
+const headers = (json) => {
+  const h = {};
+  if (json) h['Content-Type'] = 'application/json';
+  if (apiKey()) h['X-API-Key'] = apiKey();
+  return h;
+};
+
+$('btnCreateOrg').onclick = async () => {
+  const r = await fetch('/api/saas/orgs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: $('orgName').value, plan: $('orgPlan').value }),
+  });
+  const d = await r.json();
+  $('orgOut').textContent = JSON.stringify(d, null, 2);
+  if (d.org && d.org.apiKey) $('apiKey').value = d.org.apiKey;
+};
+
+$('btnMe').onclick = async () => {
+  const r = await fetch('/api/saas/me', { headers: headers() });
+  $('meOut').textContent = JSON.stringify(await r.json(), null, 2);
+};
+
+$('btnBoot').onclick = async () => {
+  const id = $('matchId').value.trim() || 'partido-demo';
+  const r = await fetch('/api/room/' + encodeURIComponent(id) + '/bootstrap', {
+    method: 'POST',
+    headers: headers(true),
+    body: JSON.stringify({ title: $('matchTitle').value, status: 'open' }),
+  });
+  const d = await r.json();
+  $('bootOut').textContent = JSON.stringify(d, null, 2);
+  const base = location.origin;
+  $('links').innerHTML =
+    '<a href="/publish.html?match=' + id + '&label=Cam1" target="_blank">Transmitir</a>' +
+    '<a href="/watch.html?match=' + id + '" target="_blank">Ver</a>' +
+    '<a href="/director.html?match=' + id + '" target="_blank">Director</a>' +
+    '<a href="/program.html?match=' + id + '" target="_blank">Programa OBS</a>';
+};
+
+$('btnEnd').onclick = async () => {
+  const id = $('matchId').value.trim();
+  const r = await fetch('/api/room/' + encodeURIComponent(id) + '/end', { method: 'POST', headers: headers() });
+  $('bootOut').textContent = JSON.stringify(await r.json(), null, 2);
+};
+
+$('btnTicket').onclick = async () => {
+  const id = $('matchId').value.trim();
+  const r = await fetch('/api/admin/ticket', {
+    method: 'POST',
+    headers: headers(true),
+    body: JSON.stringify({ matchId: id, maxUses: +$('maxUses').value || 50, label: $('ticketLabel').value }),
+  });
+  $('ticketOut').textContent = JSON.stringify(await r.json(), null, 2);
+};
+
+$('btnGenes').onclick = async () => {
+  const id = $('matchId').value.trim();
+  const r = await fetch('/api/room/' + encodeURIComponent(id) + '/genes');
+  $('genesOut').textContent = JSON.stringify(await r.json(), null, 2);
+};
+
+$('btnLive').onclick = async () => {
+  const r = await fetch('/api/saas/live');
+  $('genesOut').textContent = JSON.stringify(await r.json(), null, 2);
+};
+</script>
+</body>
+</html>
