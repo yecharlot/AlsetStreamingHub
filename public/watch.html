@@ -175,7 +175,7 @@
       var mesh = await H.meshPull(ws, p.id, function(stream){
         handle.stream=stream;
         var el=camsEl.querySelector('video[data-prev="'+p.id+'"]');
-        if(el){ el.srcObject=stream; el.play().catch(function(){}); }
+        if(el){ if(H.attachVideo) H.attachVideo(el, stream); else { el.srcObject=stream; el.play().catch(function(){}); } }
         if(mosaicIds.indexOf(p.id)>=0) renderMosaic();
       });
       handle.mode='mesh'; handle.mesh=mesh;
@@ -206,8 +206,8 @@
     if(p.sfuSessionId&&p.tracks&&p.tracks.length){
       try{
         programSession=await H.sfuPull(p.sfuSessionId,p.tracks);
-        video.srcObject=programSession.stream; video.muted=true;
-        video.play().catch(function(){});
+        if (H.attachVideo) H.attachVideo(video, programSession.stream);
+        else { video.srcObject=programSession.stream; video.muted=true; video.play().catch(function(){}); }
         setStatus("Programa · "+(p.label||id)+" (SFU)", "on");
         badge.classList.add("on");
       }catch(e){
@@ -223,11 +223,26 @@
 
   async function meshProgram(p,id,userClick){
     try{
+      setStatus("Conectando mesh…");
       programSession=await H.meshPull(ws,id,function(stream){
-        video.srcObject=stream; video.muted=true; video.play().catch(function(){});
-        setStatus("Programa · "+(p.label||id)+" (mesh)", "on");
-        badge.classList.add("on");
+        if (H.attachVideo) H.attachVideo(video, stream);
+        else { video.srcObject=stream; video.muted=true; video.play().catch(function(){}); }
+        if (stream.getTracks().length) {
+          setStatus("Programa · "+(p.label||id)+" (mesh)", "on");
+          badge.classList.add("on");
+        }
       });
+      // Esperar tracks reales (ICE/TURN)
+      if (H.waitTracks) await H.waitTracks(programSession.stream, 15000);
+      if (!programSession.stream.getTracks().length) {
+        setStatus("Mesh sin video (red/NAT). Reintenta o misma WiFi.", "err");
+        if (userClick) log("ICE/mesh sin tracks tras 15s");
+        badge.classList.remove("on");
+        return;
+      }
+      if (H.attachVideo) H.attachVideo(video, programSession.stream);
+      setStatus("Programa · "+(p.label||id)+" (mesh)", "on");
+      badge.classList.add("on");
     }catch(e){
       setStatus("No se pudo ver esta señal", "err");
       if(userClick) log(String(e.message||e));

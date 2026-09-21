@@ -121,6 +121,9 @@
       setStatus("Publicando señal (SFU)…");
       pub = await H.sfuPublish(stream);
       sendSfuBind();
+      // Reenviar bind por si el viewer entró antes
+      setTimeout(sendSfuBind, 800);
+      setTimeout(sendSfuBind, 2500);
       setStatus("En transmisión · no cierres esta pestaña", "on");
       badge.classList.add("on");
       hudNet.textContent = "SFU conectado";

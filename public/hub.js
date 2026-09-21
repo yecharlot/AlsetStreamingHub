@@ -1,11 +1,11 @@
-/* Alset Streaming Hub — SFU (Cloudflare Calls, patrón echo oficial) + mesh fallback */
+/* Alset Streaming Hub — SFU (Calls echo) + mesh con TURN de respaldo */
 (function (global) {
   function qs(name, fallback) {
     return new URL(location.href).searchParams.get(name) || fallback || "";
   }
 
   function wsUrl(matchId, opts) {
-    const u = new URL("/ws/" + encodeURIComponent(matchId), location.href);
+    var u = new URL("/ws/" + encodeURIComponent(matchId), location.href);
     u.protocol = location.protocol === "https:" ? "wss:" : "ws:";
     u.searchParams.set("role", opts.role || "viewer");
     if (opts.id) u.searchParams.set("id", opts.id);
@@ -14,20 +14,41 @@
     return u.toString();
   }
 
+  /** STUN + TURN público de respaldo (mesh en redes móviles) */
+  function iceServers() {
+    return [
+      { urls: "stun:stun.cloudflare.com:3478" },
+      { urls: "stun:stun.l.google.com:19302" },
+      {
+        urls: "turn:openrelay.metered.ca:80",
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
+      {
+        urls: "turn:openrelay.metered.ca:443",
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
+      {
+        urls: "turn:openrelay.metered.ca:443?transport=tcp",
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
+    ];
+  }
+
   function createPC() {
     return new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.cloudflare.com:3478" },
-        { urls: "stun:stun.l.google.com:19302" },
-      ],
+      iceServers: iceServers(),
       bundlePolicy: "max-bundle",
+      iceCandidatePoolSize: 4,
     });
   }
 
   async function getCam() {
     if (!window.isSecureContext) throw new Error("Usa HTTPS.");
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      throw new Error("Sin getUserMedia en este navegador.");
+      throw new Error("Sin getUserMedia.");
     }
     try {
       return await navigator.mediaDevices.getUserMedia({
@@ -44,16 +65,18 @@
   }
 
   async function api(path, body) {
-    const r = await fetch(path, {
+    var r = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body === undefined ? {} : body),
     });
-    const j = await r.json().catch(() => ({}));
+    var j = await r.json().catch(function () {
+      return {};
+    });
     if (!r.ok) {
-      const msg =
-        j.error || j.message || (j.data && j.data.errorDescription) || "HTTP " + r.status;
-      throw new Error(msg);
+      throw new Error(
+        j.error || j.message || (j.data && j.data.errorDescription) || "HTTP " + r.status
+      );
     }
     return j;
   }
@@ -64,15 +87,16 @@
     }
     return new Promise(function (resolve, reject) {
       var t = setTimeout(function () {
-        reject(new Error("ICE timeout"));
+        reject(new Error("ICE timeout (" + pc.iceConnectionState + ")"));
       }, ms);
       function h() {
-        if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+        var s = pc.iceConnectionState;
+        if (s === "connected" || s === "completed") {
           clearTimeout(t);
           pc.removeEventListener("iceconnectionstatechange", h);
           resolve();
         }
-        if (pc.iceConnectionState === "failed") {
+        if (s === "failed") {
           clearTimeout(t);
           pc.removeEventListener("iceconnectionstatechange", h);
           reject(new Error("ICE failed"));
@@ -82,10 +106,21 @@
     });
   }
 
-  /**
-   * Publicar cámara al SFU — patrón echo Cloudflare:
-   * trackName = MediaStreamTrack.id
-   */
+  function waitTracks(stream, ms) {
+    if (stream.getTracks().length) return Promise.resolve();
+    return new Promise(function (resolve) {
+      var n = 0;
+      var iv = setInterval(function () {
+        n++;
+        if (stream.getTracks().length || n * 100 >= ms) {
+          clearInterval(iv);
+          resolve();
+        }
+      }, 100);
+    });
+  }
+
+  /** Publicar al SFU (patrón echo Cloudflare) */
   async function sfuPublish(stream) {
     var sess = await api("/api/sfu/session", {});
     var sessionId = (sess.session && sess.session.sessionId) || sess.sessionId;
@@ -103,7 +138,9 @@
       return {
         location: "local",
         mid: String(tr.mid),
-        trackName: tr.sender.track ? tr.sender.track.id : "t-" + Math.random().toString(36).slice(2, 8),
+        trackName: tr.sender.track
+          ? tr.sender.track.id
+          : "t-" + Math.random().toString(36).slice(2, 8),
       };
     });
 
@@ -112,60 +149,50 @@
       sessionDescription: { type: "offer", sdp: pc.localDescription.sdp },
       tracks: tracksPayload,
     });
-
     var push = res.result || res;
-    if (push.errorCode || push.errorDescription) {
-      throw new Error(push.errorDescription || push.errorCode);
-    }
-    var sd = push.sessionDescription;
-    if (!sd || !sd.sdp) {
-      throw new Error("SFU no devolvió answer al publicar");
+    if (push.errorCode) throw new Error(push.errorDescription || push.errorCode);
+    if (!push.sessionDescription || !push.sessionDescription.sdp) {
+      throw new Error("SFU sin answer al publicar");
     }
 
-    // Registrar ICE wait antes del setRemoteDescription (evitar race)
-    var iceWait = waitIceConnected(pc, 8000).catch(function () {});
-    await pc.setRemoteDescription(new RTCSessionDescription(sd));
-    await iceWait;
+    var iceP = waitIceConnected(pc, 10000).catch(function (e) {
+      console.warn(e);
+    });
+    await pc.setRemoteDescription(new RTCSessionDescription(push.sessionDescription));
+    await iceP;
 
-    // Nombres confirmados por el servidor (imprescindibles para pull)
     var confirmed = [];
     (push.tracks || []).forEach(function (t) {
-      if (t.errorCode) return;
-      if (t.trackName) {
-        confirmed.push({
-          trackName: t.trackName,
-          mid: t.mid != null ? String(t.mid) : undefined,
-          kind: String(t.trackName).indexOf("audio") >= 0 ? "audio" : "video",
-        });
-      }
+      if (t.errorCode || !t.trackName) return;
+      confirmed.push({
+        trackName: t.trackName,
+        mid: t.mid != null ? String(t.mid) : undefined,
+      });
     });
     if (!confirmed.length) {
       confirmed = tracksPayload.map(function (t) {
-        return { trackName: t.trackName, mid: t.mid, kind: "video" };
+        return { trackName: t.trackName, mid: t.mid };
       });
     }
 
     return { pc: pc, sessionId: sessionId, tracks: confirmed, mode: "sfu" };
   }
 
-  /**
-   * Suscribirse a tracks remotos — patrón echo Cloudflare
-   */
+  /** Suscribir tracks remotos SFU */
   async function sfuPull(remoteSessionId, remoteTracks) {
-    if (!remoteSessionId) throw new Error("Sin sessionId del publicador");
+    if (!remoteSessionId) throw new Error("Sin sessionId publicador");
     var list = (remoteTracks || []).filter(function (t) {
       return t && (t.trackName || t.name);
     });
-    if (!list.length) throw new Error("Sin trackNames del publicador");
+    if (!list.length) throw new Error("Publicador sin trackNames (reinicia TX)");
 
     var sess = await api("/api/sfu/session", {});
     var sessionId = (sess.session && sess.session.sessionId) || sess.sessionId;
-    if (!sessionId) throw new Error("Sin sessionId SFU (viewer)");
+    if (!sessionId) throw new Error("Sin sessionId viewer");
 
     var pc = createPC();
     var remoteStream = new MediaStream();
 
-    // ontrack global (además del wait por mid)
     pc.ontrack = function (ev) {
       if (ev.track) remoteStream.addTrack(ev.track);
       if (ev.streams && ev.streams[0]) {
@@ -175,34 +202,30 @@
       }
     };
 
-    var tracksBody = list.map(function (t) {
-      return {
-        location: "remote",
-        sessionId: remoteSessionId,
-        trackName: t.trackName || t.name,
-      };
-    });
-
     var res = await api("/api/sfu/tracks", {
       sessionId: sessionId,
-      tracks: tracksBody,
+      tracks: list.map(function (t) {
+        return {
+          location: "remote",
+          sessionId: remoteSessionId,
+          trackName: t.trackName || t.name,
+        };
+      }),
     });
     var pull = res.result || res;
     if (pull.errorCode) throw new Error(pull.errorDescription || pull.errorCode);
 
     var trackList = pull.tracks || [];
-
-    // Esperar tracks POR mid ANTES de setRemoteDescription (como el demo echo)
-    var resolvingTracks = Promise.all(
+    var resolving = Promise.all(
       trackList
         .filter(function (t) {
           return t.mid && !t.errorCode;
         })
         .map(function (t) {
-          return new Promise(function (resolve, reject) {
+          return new Promise(function (resolve) {
             var timer = setTimeout(function () {
-              reject(new Error("timeout mid=" + t.mid));
-            }, 12000);
+              resolve(null);
+            }, 10000);
             function handler(ev) {
               if (ev.transceiver && String(ev.transceiver.mid) !== String(t.mid)) return;
               clearTimeout(timer);
@@ -223,37 +246,17 @@
         sessionId: sessionId,
         sessionDescription: { type: "answer", sdp: pc.localDescription.sdp },
       });
-    } else if (pull.requiresImmediateRenegotiation || pull.requiresImmediateRenegotation) {
-      throw new Error("SFU pidió renegotiate pero no envió SDP");
     }
 
-    try {
-      await resolvingTracks;
-    } catch (e) {
-      console.warn("mid wait", e);
-    }
-
-    // Espera extra por ontrack genérico
-    if (!remoteStream.getTracks().length) {
-      await new Promise(function (resolve) {
-        var n = 0;
-        var iv = setInterval(function () {
-          n++;
-          if (remoteStream.getTracks().length || n > 40) {
-            clearInterval(iv);
-            resolve();
-          }
-        }, 100);
-      });
-    }
-
-    await waitIceConnected(pc, 10000).catch(function () {});
+    await resolving;
+    await waitTracks(remoteStream, 5000);
+    await waitIceConnected(pc, 12000).catch(function () {});
 
     if (!remoteStream.getTracks().length) {
       try {
         pc.close();
       } catch (_) {}
-      throw new Error("SFU conectó pero no llegaron tracks de video/audio");
+      throw new Error("SFU sin tracks de media");
     }
 
     return {
@@ -269,58 +272,98 @@
     };
   }
 
+  /** Mesh: publicador responde offers de viewers */
   function meshPublisherAttach(stream, ws) {
     var pcs = new Map();
 
+    function getOrCreate(from) {
+      var entry = pcs.get(from);
+      if (entry) return entry;
+      var pc = createPC();
+      var pending = [];
+      stream.getTracks().forEach(function (t) {
+        pc.addTrack(t, stream);
+      });
+      pc.onicecandidate = function (e) {
+        if (e.candidate && ws.readyState === 1) {
+          ws.send(
+            JSON.stringify({
+              type: "signal",
+              to: from,
+              data: { candidate: e.candidate },
+            })
+          );
+        }
+      };
+      entry = { pc: pc, pending: pending, remoteSet: false };
+      pcs.set(from, entry);
+      return entry;
+    }
+
     async function handleSignal(from, data) {
-      var pc = pcs.get(from);
-      if (!pc) {
-        pc = createPC();
-        pcs.set(from, pc);
-        stream.getTracks().forEach(function (t) {
-          pc.addTrack(t, stream);
-        });
-        pc.onicecandidate = function (e) {
-          if (e.candidate && ws.readyState === 1) {
+      var entry = getOrCreate(from);
+      var pc = entry.pc;
+      try {
+        if (data.offer) {
+          await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+          entry.remoteSet = true;
+          while (entry.pending.length) {
+            try {
+              await pc.addIceCandidate(entry.pending.shift());
+            } catch (_) {}
+          }
+          var answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          if (ws.readyState === 1) {
             ws.send(
               JSON.stringify({
                 type: "signal",
                 to: from,
-                data: { candidate: e.candidate },
+                data: { answer: answer },
               })
             );
           }
-        };
-      }
-      if (data.offer) {
-        await pc.setRemoteDescription(data.offer);
-        var answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        ws.send(JSON.stringify({ type: "signal", to: from, data: { answer: answer } }));
-      } else if (data.candidate) {
-        try {
-          await pc.addIceCandidate(data.candidate);
-        } catch (_) {}
+        } else if (data.candidate) {
+          if (!entry.remoteSet) entry.pending.push(data.candidate);
+          else {
+            try {
+              await pc.addIceCandidate(data.candidate);
+            } catch (_) {}
+          }
+        }
+      } catch (e) {
+        console.warn("mesh pub signal", e);
       }
     }
 
     return {
       handleSignal: handleSignal,
       close: function () {
-        pcs.forEach(function (pc) {
-          pc.close();
+        pcs.forEach(function (e) {
+          try {
+            e.pc.close();
+          } catch (_) {}
         });
         pcs.clear();
       },
     };
   }
 
+  /** Mesh: viewer pide stream al publicador */
   async function meshPull(ws, producerId, onStream) {
     var pc = createPC();
     var remoteStream = new MediaStream();
+    var pending = [];
+    var remoteSet = false;
+
     pc.ontrack = function (e) {
       if (e.track) remoteStream.addTrack(e.track);
-      onStream(remoteStream);
+      if (e.streams && e.streams[0]) {
+        e.streams[0].getTracks().forEach(function (t) {
+          if (remoteStream.getTracks().indexOf(t) < 0) remoteStream.addTrack(t);
+        });
+      }
+      if (typeof onStream === "function") onStream(remoteStream);
     };
     pc.onicecandidate = function (e) {
       if (e.candidate && ws.readyState === 1) {
@@ -333,28 +376,62 @@
         );
       }
     };
+
     pc.addTransceiver("video", { direction: "recvonly" });
     pc.addTransceiver("audio", { direction: "recvonly" });
     var offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    ws.send(JSON.stringify({ type: "signal", to: producerId, data: { offer: offer } }));
+    if (ws.readyState === 1) {
+      ws.send(
+        JSON.stringify({
+          type: "signal",
+          to: producerId,
+          data: { offer: offer },
+        })
+      );
+    }
 
     return {
       pc: pc,
       stream: remoteStream,
       mode: "mesh",
       handleSignal: async function (data) {
-        if (data.answer) await pc.setRemoteDescription(data.answer);
-        else if (data.candidate) {
-          try {
-            await pc.addIceCandidate(data.candidate);
-          } catch (_) {}
+        try {
+          if (data.answer) {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            remoteSet = true;
+            while (pending.length) {
+              try {
+                await pc.addIceCandidate(pending.shift());
+              } catch (_) {}
+            }
+          } else if (data.candidate) {
+            if (!remoteSet) pending.push(data.candidate);
+            else {
+              try {
+                await pc.addIceCandidate(data.candidate);
+              } catch (_) {}
+            }
+          }
+        } catch (e) {
+          console.warn("mesh pull signal", e);
         }
       },
       close: function () {
-        pc.close();
+        try {
+          pc.close();
+        } catch (_) {}
       },
     };
+  }
+
+  function attachVideo(el, stream) {
+    if (!el || !stream) return;
+    el.srcObject = stream;
+    el.muted = true;
+    el.playsInline = true;
+    var p = el.play();
+    if (p && p.catch) p.catch(function () {});
   }
 
   function diag() {
@@ -376,7 +453,9 @@
     sfuPull: sfuPull,
     meshPublisherAttach: meshPublisherAttach,
     meshPull: meshPull,
+    attachVideo: attachVideo,
+    waitTracks: waitTracks,
     diag: diag,
   };
 })(window);
-/* ash-sfu-echo-pattern-2026-09-21 */
+/* ash-mesh-turn-2026-09-21 */
