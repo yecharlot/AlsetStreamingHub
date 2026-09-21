@@ -82,10 +82,14 @@ export class MatchRoom {
         tracks: prev.tracks || [],
       };
     });
+    const programId = (await this.state.storage.get("program")) || null;
+    const out = (await this.state.storage.get("youtube")) || null;
     return {
       type: "room_state",
       meta,
       producers: list,
+      programId,
+      youtube: out ? { rtmpUrl: out.rtmpUrl || "", hasKey: !!out.streamKey, note: out.note || "" } : null,
       viewers: [...this.sessions.values()].filter((s) => s.role === "viewer" || s.role === "director").length,
       publishers: livePubs.length,
       matchHint: "Usa el mismo nombre de evento en Transmitir y en Ver",
@@ -108,6 +112,37 @@ export class MatchRoom {
         await this.state.storage.put("meta", meta);
         this.broadcast({ type: "meta", meta });
         return Response.json(meta);
+      }
+      if (url.pathname.endsWith("/youtube") && request.method === "POST") {
+        const body = await request.json().catch(() => ({}));
+        const yt = {
+          rtmpUrl: String(body.rtmpUrl || "rtmps://a.rtmp.youtube.com/live2").slice(0, 200),
+          streamKey: body.streamKey ? String(body.streamKey).slice(0, 200) : "",
+          note: String(body.note || "").slice(0, 200),
+          updatedAt: Date.now(),
+        };
+        await this.state.storage.put("youtube", yt);
+        this.broadcast({
+          type: "youtube",
+          youtube: { rtmpUrl: yt.rtmpUrl, hasKey: !!yt.streamKey, note: yt.note },
+        });
+        return Response.json({
+          ok: true,
+          youtube: { rtmpUrl: yt.rtmpUrl, hasKey: !!yt.streamKey },
+          obs: {
+            programUrl: "Usa /program.html?match=ESTE_EVENTO como Browser Source",
+            youtubeServer: yt.rtmpUrl,
+            hint: "OBS: Browser Source = programa Alset; Transmisión = YouTube RTMP + clave",
+          },
+        });
+      }
+      if (url.pathname.endsWith("/youtube") && request.method === "GET") {
+        const yt = (await this.state.storage.get("youtube")) || {};
+        return Response.json({
+          rtmpUrl: yt.rtmpUrl || "rtmps://a.rtmp.youtube.com/live2",
+          hasKey: !!yt.streamKey,
+          note: yt.note || "",
+        });
       }
       if (url.pathname.endsWith("/ticket") && request.method === "POST") {
         const body = await request.json().catch(() => ({}));

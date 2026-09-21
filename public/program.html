@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Programa · Alset Live</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #000; overflow: hidden; font-family: system-ui, sans-serif; }
+  #v { width: 100vw; height: 100vh; object-fit: contain; background: #000; }
+  #hud {
+    position: fixed; left: 12px; bottom: 12px; color: rgba(255,255,255,.7);
+    font-size: 12px; text-shadow: 0 1px 3px #000; pointer-events: none;
+  }
+  #err {
+    position: fixed; inset: 0; display: none; place-items: center; color: #ccc;
+    background: #0a0a0a; text-align: center; padding: 2rem; line-height: 1.5;
+  }
+  #err.on { display: grid; }
+</style>
+</head>
+<body>
+<video id="v" playsinline autoplay muted></video>
+<div id="hud">Alset Live · programa</div>
+<div id="err">Esperando señal de programa…</div>
+<script src="/hub.js"></script>
+<script>
+(function () {
+  var H = window.AlsetHub;
+  var matchId = H.qs("match", "evento-demo");
+  var ticket = H.qs("ticket", "");
+  var myId = "prog-" + Math.random().toString(36).slice(2, 8);
+  var video = document.getElementById("v");
+  var hud = document.getElementById("hud");
+  var err = document.getElementById("err");
+  var producers = [], programId = null, activeId = null, session = null, ws;
+
+  function showErr(on, text) {
+    err.className = on ? "on" : "";
+    if (text) err.textContent = text;
+  }
+
+  function best() {
+    return producers.filter(function (p) { return p.online; })
+      .sort(function (a, b) { return (b.quality || 0) - (a.quality || 0); })[0];
+  }
+
+  async function select(id) {
+    if (!id || id === activeId) return;
+    var p = producers.filter(function (x) { return x.id === id && x.online; })[0];
+    if (!p) return;
+    activeId = id;
+    hud.textContent = "Alset Live · " + (p.label || id);
+    if (session && session.close) try { session.close(); } catch (_) {}
+    session = null;
+    showErr(true, "Conectando programa…");
+
+    if (p.sfuSessionId && p.tracks && p.tracks.length) {
+      try {
+        session = await H.sfuPull(p.sfuSessionId, p.tracks);
+        video.srcObject = session.stream;
+        video.muted = true;
+        await video.play().catch(function () {});
+        showErr(false);
+        return;
+      } catch (e) {}
+    }
+    try {
+      session = await H.meshPull(ws, id, function (stream) {
+        video.srcObject = stream;
+        video.muted = true;
+        video.play().catch(function () {});
+        showErr(false);
+      });
+    } catch (e) {
+      showErr(true, "Sin señal de programa");
+    }
+  }
+
+  function pick() {
+    if (programId) {
+      var p = producers.find(function (x) { return x.id === programId && x.online; });
+      if (p) return select(programId);
+    }
+    var b = best();
+    if (b) select(b.id);
+    else showErr(true, "Esperando cámaras en «" + matchId + "»…");
+  }
+
+  async function poll() {
+    try {
+      var r = await fetch("/api/room/" + encodeURIComponent(matchId) + "/state");
+      var msg = await r.json();
+      if (msg.producers) producers = msg.producers;
+      if (msg.programId) programId = msg.programId;
+      pick();
+    } catch (_) {}
+  }
+  setInterval(poll, 5000);
+  setTimeout(poll, 500);
+
+  ws = new WebSocket(H.wsUrl(matchId, { role: "viewer", id: myId, ticket: ticket }));
+  ws.onmessage = function (ev) {
+    var msg = JSON.parse(ev.data);
+    if (msg.type === "room_state" || msg.type === "presence") {
+      producers = msg.producers || producers;
+      if (msg.programId) programId = msg.programId;
+      pick();
+    }
+    if (msg.type === "producer_join") {
+      producers = producers.filter(function (p) { return p.id !== msg.producer.id; }).concat([msg.producer]);
+      pick();
+    }
+    if (msg.type === "producer_leave") {
+      producers = producers.map(function (p) {
+        return p.id === msg.id ? Object.assign({}, p, { online: false }) : p;
+      });
+      if (activeId === msg.id) { activeId = null; pick(); }
+    }
+    if (msg.type === "program" && msg.producerId) {
+      programId = msg.producerId;
+      select(msg.producerId);
+    }
+    if (msg.type === "signal" && msg.from === activeId && session && session.handleSignal) {
+      session.handleSignal(msg.data);
+    }
+  };
+})();
+</script>
+</body>
+</html>

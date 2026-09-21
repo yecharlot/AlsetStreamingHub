@@ -49,6 +49,33 @@
     </div>
   </section>
 
+
+  <section class="card">
+    <h2>Salida a YouTube</h2>
+    <p style="font-size:0.8rem;color:var(--muted);margin-bottom:0.55rem;line-height:1.45">
+      YouTube recibe <b>RTMP</b>, no WebRTC del móvil. El camino profesional:
+      <b>Alset programa → OBS (Browser Source) → YouTube Live</b>.
+    </p>
+    <label>URL de programa (para OBS)</label>
+    <div class="share-box">
+      <input id="linkProg" readonly/>
+      <button type="button" class="btn sm ghost" id="copyProg">Copiar</button>
+    </div>
+    <label>Servidor RTMP YouTube</label>
+    <input id="ytServer" value="rtmps://a.rtmp.youtube.com/live2"/>
+    <label>Clave de transmisión (YouTube Studio → En vivo)</label>
+    <input id="ytKey" type="password" placeholder="Pégala solo en OBS, no la compartas"/>
+    <div class="steps" style="margin-top:0.75rem">
+      <div class="step"><n>1</n><div><b>YouTube Studio</b> — En vivo → copiar servidor + clave.</div></div>
+      <div class="step"><n>2</n><div><b>OBS</b> — Fuente «Navegador» = URL de programa Alset (1280×720).</div></div>
+      <div class="step"><n>3</n><div><b>OBS → Configuración → Emisión</b> — servicio YouTube, pega la clave → Iniciar transmisión.</div></div>
+    </div>
+    <p style="font-size:0.72rem;color:var(--muted);margin-top:0.65rem;line-height:1.4">
+      Lo duro (inyectar WebRTC directo a YouTube sin PC) exige un encoder en la nube (MediaMTX/FFmpeg).
+      OBS en una PC de control es el estándar de la industria y ya funciona con tu hub.
+    </p>
+  </section>
+
   <section class="card">
     <h2>Flujo profesional</h2>
     <div class="steps">
