@@ -1,3 +1,5 @@
+import { GENE_KIND, spawnGene, destroyGene, genePublic, planOf } from "./gene.js";
+
 /**
  * MatchRoom — Durable Object
  * - Registry of live producers (mobile cameras)
@@ -13,18 +15,39 @@ export class MatchRoom {
     this.sessions = new Map(); // ws -> { role, id, label }
   }
 
-  async ensureMeta() {
+  async ensureMeta(matchId) {
     let meta = await this.state.storage.get("meta");
     if (!meta) {
       meta = {
-        id: "default",
+        id: matchId || "default",
         title: "Evento en vivo",
         createdAt: Date.now(),
         status: "open", // open | live | ended
+        orgId: null,
+        plan: "free",
+        requireTicket: false,
       };
+      await this.state.storage.put("meta", meta);
+    } else if (matchId && meta.id === "default") {
+      meta.id = matchId;
       await this.state.storage.put("meta", meta);
     }
     return meta;
+  }
+
+  async getGenes() {
+    return (await this.state.storage.get("genes")) || {};
+  }
+
+  async putGenes(g) {
+    await this.state.storage.put("genes", g);
+  }
+
+  async listLiveGenes() {
+    const genes = await this.getGenes();
+    return Object.values(genes)
+      .filter((g) => g && g.status === "live")
+      .map(genePublic);
   }
 
   async getProducers() {
@@ -95,42 +118,130 @@ export class MatchRoom {
   async fetch(request) {
     const url = new URL(request.url);
 
-    // HTTP API
+    // HTTP API (no rompe WS: solo si no es upgrade)
     if (request.headers.get("Upgrade") !== "websocket") {
+      const bodyIn = request.method !== "GET" && request.method !== "HEAD"
+        ? await request.json().catch(() => ({}))
+        : {};
+      const matchHint = bodyIn.matchId || url.searchParams.get("matchId") || null;
+
       if (url.pathname.endsWith("/state") && request.method === "GET") {
         return Response.json(await this.snapshot());
       }
-      if (url.pathname.endsWith("/meta") && request.method === "POST") {
-        const body = await request.json().catch(() => ({}));
+
+      // Bootstrap: activa sala + gen stream.room (idempotente)
+      if (url.pathname.endsWith("/bootstrap") && request.method === "POST") {
+        const matchId = String(bodyIn.matchId || matchHint || "default").slice(0, 64);
+        const meta = await this.ensureMeta(matchId);
+        if (meta.status === "ended") {
+          meta.status = "open";
+          meta.endedAt = null;
+        }
+        if (bodyIn.title) meta.title = String(bodyIn.title).slice(0, 120);
+        meta.id = matchId;
+        meta.orgId = bodyIn.orgId || meta.orgId || null;
+        meta.plan = bodyIn.plan || meta.plan || "free";
+        if (typeof bodyIn.requireTicket === "boolean") meta.requireTicket = bodyIn.requireTicket;
+        meta.updatedAt = Date.now();
+        await this.state.storage.put("meta", meta);
+
+        const genes = await this.getGenes();
+        let roomGene = Object.values(genes).find(
+          (g) => g && g.kind === GENE_KIND.ROOM && g.status === "live"
+        );
+        if (!roomGene) {
+          roomGene = spawnGene({
+            kind: GENE_KIND.ROOM,
+            matchId,
+            orgId: meta.orgId,
+            label: meta.title || matchId,
+          });
+          genes[roomGene.id] = roomGene;
+          await this.putGenes(genes);
+        }
+        this.broadcast({ type: "meta", meta });
+        return Response.json({
+          ok: true,
+          meta,
+          gene: genePublic(roomGene),
+          limits: planOf(meta.plan),
+        });
+      }
+
+      if (url.pathname.endsWith("/genes") && request.method === "GET") {
         const meta = await this.ensureMeta();
-        if (body.title) meta.title = String(body.title).slice(0, 120);
-        if (body.status) meta.status = body.status;
+        const live = await this.listLiveGenes();
+        return Response.json({
+          ok: true,
+          matchId: meta.id,
+          status: meta.status,
+          genes: live,
+          count: live.length,
+        });
+      }
+
+      if (url.pathname.endsWith("/end") && request.method === "POST") {
+        const meta = await this.ensureMeta();
+        meta.status = "ended";
+        meta.endedAt = Date.now();
+        await this.state.storage.put("meta", meta);
+        const genes = await this.getGenes();
+        for (const id of Object.keys(genes)) {
+          if (genes[id] && genes[id].status === "live") {
+            genes[id] = destroyGene(genes[id]);
+          }
+        }
+        await this.putGenes(genes);
+        // Aviso a peers; no cortamos sockets a la fuerza (evita romper streams a mitad)
+        this.broadcast({ type: "event_end", meta, genes: Object.values(genes).map(genePublic) });
+        return Response.json({
+          ok: true,
+          meta,
+          genesDestroyed: Object.values(genes).filter((g) => g.status === "destroyed").length,
+        });
+      }
+
+      if (url.pathname.endsWith("/meta") && request.method === "POST") {
+        const meta = await this.ensureMeta(bodyIn.matchId);
+        if (bodyIn.title) meta.title = String(bodyIn.title).slice(0, 120);
+        if (bodyIn.status) meta.status = bodyIn.status;
+        if (typeof bodyIn.requireTicket === "boolean") meta.requireTicket = bodyIn.requireTicket;
         await this.state.storage.put("meta", meta);
         this.broadcast({ type: "meta", meta });
         return Response.json(meta);
       }
       if (url.pathname.endsWith("/ticket") && request.method === "POST") {
-        const body = await request.json().catch(() => ({}));
-        const code = (body.code || this.randomCode()).toUpperCase();
+        const meta = await this.ensureMeta();
+        if (meta.status === "ended") {
+          return Response.json({ error: "event_ended" }, { status: 409 });
+        }
+        const limits = planOf(meta.plan || "free");
         const tickets = await this.getTickets();
+        const issued = Object.keys(tickets).length;
+        if (issued >= (limits.maxTicketsPerEvent || 50)) {
+          return Response.json(
+            { error: "ticket_limit", max: limits.maxTicketsPerEvent, plan: limits.id },
+            { status: 403 }
+          );
+        }
+        const code = (bodyIn.code || this.randomCode()).toUpperCase();
         tickets[code] = {
           code,
           createdAt: Date.now(),
           uses: 0,
-          maxUses: body.maxUses || 50,
-          label: body.label || "entrada",
+          maxUses: bodyIn.maxUses || 50,
+          label: bodyIn.label || "entrada",
         };
         await this.putTickets(tickets);
         return Response.json({ ok: true, ticket: tickets[code] });
       }
       if (url.pathname.endsWith("/ticket/check") && request.method === "POST") {
-        const body = await request.json().catch(() => ({}));
-        const code = String(body.code || "").toUpperCase().trim();
+        const code = String(bodyIn.code || "").toUpperCase().trim();
         const tickets = await this.getTickets();
-        const t = tickets[code];
-        if (!t) return Response.json({ ok: false, error: "ticket_invalid" }, { status: 403 });
-        if (t.uses >= t.maxUses) return Response.json({ ok: false, error: "ticket_exhausted" }, { status: 403 });
-        return Response.json({ ok: true, ticket: { code: t.code, label: t.label } });
+        const tk = tickets[code];
+        if (!tk) return Response.json({ ok: false, error: "ticket_invalid" }, { status: 403 });
+        if (tk.uses >= tk.maxUses) return Response.json({ ok: false, error: "ticket_exhausted" }, { status: 403 });
+        return Response.json({ ok: true, ticket: { code: tk.code, label: tk.label } });
       }
       return Response.json({ error: "not_found" }, { status: 404 });
     }

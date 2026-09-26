@@ -119,22 +119,77 @@ export default {
           }
         }
         const stub = env.ROOM.get(env.ROOM.idFromName(matchId));
-        return withCors(
-          await stub.fetch(
-            new Request(new URL("/bootstrap", url.origin), {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ...body, matchId, orgId, plan }),
-            })
-          )
+        const bootRes = await stub.fetch(
+          new Request(new URL("/bootstrap", url.origin), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...body, matchId, orgId, plan }),
+          })
         );
+        // Registro de uso SaaS (best-effort; no bloquea el stream si falla)
+        if (bootRes.ok && orgId && env.SAAS) {
+          try {
+            const reg = env.SAAS.get(env.SAAS.idFromName("global"));
+            await reg.fetch(
+              new Request("https://saas/event-start", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ orgId, matchId, plan }),
+              })
+            );
+          } catch (_) {}
+        }
+        return withCors(bootRes);
       }
 
       const roomEnd = url.pathname.match(/^\/api\/room\/([^/]+)\/end$/);
       if (roomEnd && request.method === "POST") {
         const matchId = sanitizeId(roomEnd[1]);
         const stub = env.ROOM.get(env.ROOM.idFromName(matchId));
-        return withCors(await stub.fetch(new Request(new URL("/end", url.origin), { method: "POST" })));
+        const endRes = await stub.fetch(new Request(new URL("/end", url.origin), { method: "POST" }));
+        if (endRes.ok && env.SAAS) {
+          try {
+            const reg = env.SAAS.get(env.SAAS.idFromName("global"));
+            await reg.fetch(
+              new Request("https://saas/event-end", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ matchId }),
+              })
+            );
+          } catch (_) {}
+        }
+        return withCors(endRes);
+      }
+
+      // Tickets por sala (proxy al DO — no rompe admin/ticket)
+      const roomTicket = url.pathname.match(/^\/api\/room\/([^/]+)\/ticket$/);
+      if (roomTicket && request.method === "POST") {
+        const matchId = sanitizeId(roomTicket[1]);
+        const stub = env.ROOM.get(env.ROOM.idFromName(matchId));
+        return withCors(
+          await stub.fetch(
+            new Request(new URL("/ticket", url.origin), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: await request.text(),
+            })
+          )
+        );
+      }
+      const roomTicketCheck = url.pathname.match(/^\/api\/room\/([^/]+)\/ticket\/check$/);
+      if (roomTicketCheck && request.method === "POST") {
+        const matchId = sanitizeId(roomTicketCheck[1]);
+        const stub = env.ROOM.get(env.ROOM.idFromName(matchId));
+        return withCors(
+          await stub.fetch(
+            new Request(new URL("/ticket/check", url.origin), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: await request.text(),
+            })
+          )
+        );
       }
 
       const wsMatch = url.pathname.match(/^\/ws\/([^/]+)$/);
@@ -165,10 +220,15 @@ export default {
       }
 
       if (env.ASSETS) {
-        const res = await env.ASSETS.fetch(request);
+        let assetReq = request;
+        // Landing vendible: / → index.html (html_handling=none no reescribe solo)
+        if (url.pathname === "/" || url.pathname === "") {
+          assetReq = new Request(new URL("/index.html", url.origin), request);
+        }
+        const res = await env.ASSETS.fetch(assetReq);
         const headers = new Headers(res.headers);
         headers.set("Access-Control-Allow-Origin", "*");
-        if (url.pathname.endsWith(".html") || url.pathname === "/") {
+        if (url.pathname.endsWith(".html") || url.pathname === "/" || url.pathname === "") {
           headers.set("Cache-Control", "no-store");
         }
         return new Response(res.body, { status: res.status, headers });

@@ -134,6 +134,45 @@ export class SaaSRegistry {
     return org;
   }
 
+  
+  async eventStart(body) {
+    const orgId = body.orgId;
+    if (!orgId) return { error: "orgId_required" };
+    const orgs = await this.getOrgs();
+    const org = orgs[orgId];
+    if (!org) return { error: "org_not_found" };
+    if (!org.usage) org.usage = DEFAULT_USAGE();
+    const plan = planOf(org.plan);
+    // Límite de eventos creados en el ciclo (simple, vendible)
+    if ((org.usage.eventsCreated || 0) >= (plan.maxLiveEvents || 1) * 50) {
+      // techo alto de abuso; el cupo live se controla por liveIndex
+    }
+    const live = await this.getLiveIndex();
+    const liveForOrg = Object.values(live).filter((e) => e && e.orgId === orgId && e.status !== "ended");
+    if (liveForOrg.length >= (plan.maxLiveEvents || 1)) {
+      return {
+        error: "plan_limit_live_events",
+        plan: plan.id,
+        maxLiveEvents: plan.maxLiveEvents,
+        current: liveForOrg.length,
+      };
+    }
+    live[body.matchId] = {
+      matchId: body.matchId,
+      orgId,
+      plan: plan.id,
+      status: "live",
+      startedAt: Date.now(),
+    };
+    await this.putLiveIndex(live);
+    org.usage.eventsCreated = (org.usage.eventsCreated || 0) + 1;
+    org.usage.lastEventAt = Date.now();
+    org.eventsCreated = (org.eventsCreated || 0) + 1;
+    org.usage.geneSpawns = (org.usage.geneSpawns || 0) + 1;
+    await this.saveOrg(org);
+    return { ok: true, live: live[body.matchId], limits: plan };
+  }
+
   async saveOrg(org) {
     const orgs = await this.getOrgs();
     orgs[org.id] = org;
@@ -352,6 +391,40 @@ export class SaaSRegistry {
         payments: this.publicPayments(org.payments),
         usage: org.usage || DEFAULT_USAGE(),
       });
+    }
+
+    if (path === "/event-start" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const out = await this.eventStart(body);
+      return Response.json(out, { status: out.error ? 403 : 200 });
+    }
+
+    if (path === "/event-end" && request.method === "POST") {
+      const body = await request.json().catch(() => ({}));
+      const live = await this.getLiveIndex();
+      const ev = live[body.matchId];
+      if (ev) {
+        ev.status = "ended";
+        ev.endedAt = Date.now();
+        live[body.matchId] = ev;
+        await this.putLiveIndex(live);
+        if (ev.orgId) {
+          const orgs = await this.getOrgs();
+          const org = orgs[ev.orgId];
+          if (org) {
+            if (!org.usage) org.usage = DEFAULT_USAGE();
+            org.usage.eventsEnded = (org.usage.eventsEnded || 0) + 1;
+            org.usage.geneDestroys = (org.usage.geneDestroys || 0) + 1;
+            org.usage.history = (org.usage.history || []).slice(-40);
+            org.usage.history.push({
+              matchId: body.matchId,
+              endedAt: ev.endedAt,
+            });
+            await this.saveOrg(org);
+          }
+        }
+      }
+      return Response.json({ ok: true });
     }
 
     if (path === "/payments" && request.method === "GET") {
